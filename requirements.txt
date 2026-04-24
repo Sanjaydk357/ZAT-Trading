@@ -1,0 +1,7 @@
+flask
+kiteconnect
+schedule
+pandas
+numpy
+python-dotenv
+gunicorn

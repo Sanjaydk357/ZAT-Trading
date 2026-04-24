@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: zerobot-pro
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers=1 --threads=2 --timeout=120
+    envVars:
+      - key: API_KEY
+        sync: false
+      - key: API_SECRET
+        sync: false
+      - key: FLASK_ENV
+        value: production

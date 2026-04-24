@@ -1,0 +1,22 @@
+# Security
+.env
+access_token.json
+
+# Trade data
+trades.json
+paper_trades.json
+trading_bot.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
