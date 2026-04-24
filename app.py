@@ -485,6 +485,60 @@ def api_performance():
         "avg_win":        round(gross / wins, 2) if wins > 0 else 0.0,
     })
 
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    """Logout — clear token, stop bot, reset auth."""
+    try:
+        # Stop bot if running
+        if engine.bot_running:
+            engine.stop_bot()
+            log.info("[LOGOUT] Bot stopped.")
+
+        # Revoke token on Zerodha side
+        try:
+            engine.kite.invalidate_access_token()
+            log.info("[LOGOUT] Token revoked on Zerodha.")
+        except Exception as e:
+            log.warning(f"[LOGOUT] Could not revoke token: {e}")
+
+        # Reset auth flag in engine
+        engine._auth = False
+
+        # Delete token file
+        token_file = engine.CONFIG.get("token_file", "access_token.json")
+        if os.path.exists(token_file):
+            os.remove(token_file)
+            log.info("[LOGOUT] Token file deleted.")
+
+        # Clear profile and funds from state
+        engine.state["profile"] = {}
+        engine.state["funds"]   = {}
+        engine.add_log("User logged out successfully", "alert")
+
+        return jsonify({"ok": True, "msg": "Logged out successfully"})
+
+    except Exception as e:
+        log.error(f"[LOGOUT] Error: {e}")
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/logout")
+def logout_page():
+    """GET logout — redirect to index after clearing session."""
+    try:
+        engine._auth = False
+        if engine.bot_running:
+            engine.stop_bot()
+        import os
+        token_file = engine.CONFIG.get("token_file", "access_token.json")
+        if os.path.exists(token_file):
+            os.remove(token_file)
+        engine.state["profile"] = {}
+        engine.state["funds"]   = {}
+        engine.add_log("User logged out via GET", "alert")
+    except Exception as e:
+        log.error(f"[LOGOUT GET] {e}")
+    return redirect(url_for("index"))
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
