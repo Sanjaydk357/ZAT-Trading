@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZeroBot Pro — VWAP-EMA Hybrid</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #080a0d; --bg2: #0f1215; --bg3: #161a20; --bg4: #1c2028;
+      --border: #1e2530; --border2: #252d3a;
+      --green: #00e676; --green-dim: #00e67615; --green2: #00c853;
+      --red: #ff4b4b; --red-dim: #ff4b4b15;
+      --yellow: #ffd54f; --yellow-dim: #ffd54f15;
+      --blue: #448aff; --blue-dim: #448aff15;
+      --purple: #b388ff; --cyan: #18ffff;
+      --paper: #ff9800; --paper-dim: #ff980015;
+      --text: #dde4f0; --muted: #4a5568; --muted2: #6b7a94;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:'Space Grotesk',sans-serif;min-height:100vh;overflow-x:hidden}
+    body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:52px 52px;opacity:.2;pointer-events:none;z-index:0}
+    .wrap{position:relative;z-index:1;max-width:1440px;margin:0 auto;padding:18px 20px}
+
+    /* ─── Header ─── */
+    header{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:16px;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+    .logo{display:flex;align-items:center;gap:12px}
+    .logo-icon{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#00e676,#00b0ff);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+    .logo-text h1{font-size:1.2rem;font-weight:700;letter-spacing:-.5px}
+    .logo-text p{font-size:.65rem;color:var(--muted2);font-family:'IBM Plex Mono',monospace}
+    .header-right{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .pill{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:100px;border:1px solid var(--border2);font-size:.72rem;font-family:'IBM Plex Mono',monospace;background:var(--bg2)}
+    .dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex-shrink:0}
+    .dot.live{background:var(--green);animation:pulse 1.4s infinite}
+    .dot.halt{background:var(--red)}
+    .dot.warn{background:var(--yellow)}
+    .dot.paper-live{background:var(--paper);animation:pulse-paper 1.4s infinite}
+    @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 #00e67640}50%{opacity:.7;box-shadow:0 0 0 5px transparent}}
+    @keyframes pulse-paper{0%,100%{opacity:1;box-shadow:0 0 0 0 #ff980040}50%{opacity:.7;box-shadow:0 0 0 5px transparent}}
+
+    /* ─── Tab System ─── */
+    .tab-nav{display:flex;gap:0;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:4px;margin-bottom:16px;width:fit-content}
+    .tab-btn{padding:8px 22px;border-radius:9px;border:none;background:transparent;color:var(--muted2);font-family:'Space Grotesk',sans-serif;font-size:.82rem;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
+    .tab-btn.active{background:var(--bg3);color:var(--text);border:1px solid var(--border2)}
+    .tab-btn.active.paper-tab{color:var(--paper)}
+    .tab-content{display:none}
+    .tab-content.active{display:block}
+
+    /* ─── Paper Mode Banner ─── */
+    .paper-banner{background:linear-gradient(135deg,#1a0f00,#1a1200);border:1px solid var(--paper);border-radius:12px;padding:12px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+    .paper-banner-left{display:flex;align-items:center;gap:12px}
+    .paper-icon{font-size:1.4rem}
+    .paper-title{font-size:.85rem;font-weight:700;color:var(--paper)}
+    .paper-sub{font-size:.68rem;color:var(--muted2);font-family:'IBM Plex Mono',monospace}
+    .paper-controls{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+
+    /* ─── Login ─── */
+    .login-banner{background:linear-gradient(135deg,#0d1420,var(--bg2));border:1px solid var(--blue);border-radius:14px;padding:30px;margin-bottom:20px;text-align:center}
+    .login-banner h2{font-size:1.1rem;color:var(--blue);margin-bottom:8px}
+    .login-banner p{color:var(--muted2);font-size:.82rem;margin-bottom:18px}
+    .login-link{display:inline-block;padding:9px 26px;background:var(--blue);color:#fff;border-radius:9px;text-decoration:none;font-weight:600;font-size:.82rem}
+    .token-form{display:flex;gap:8px;margin-top:16px;justify-content:center;flex-wrap:wrap}
+    .token-input{background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:9px 14px;font-family:'IBM Plex Mono',monospace;font-size:.8rem;width:320px;outline:none}
+    .token-input:focus{border-color:var(--blue)}
+
+    /* ─── Profile ─── */
+    .profile-strip{display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:16px;flex-wrap:wrap}
+    .avatar{width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,var(--blue),var(--purple));display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:700;flex-shrink:0;color:#fff}
+    .profile-info{flex:1;min-width:100px}
+    .profile-name{font-size:.95rem;font-weight:600}
+    .profile-sub{font-size:.68rem;color:var(--muted2);font-family:'IBM Plex Mono',monospace;margin-top:2px}
+    .profile-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+    .tag{font-size:.62rem;padding:2px 7px;border-radius:4px;border:1px solid var(--border2);color:var(--muted2);font-family:'IBM Plex Mono',monospace}
+    .funds-grid{display:flex;gap:18px;flex-wrap:wrap;margin-left:auto}
+    .fund-item{text-align:right}
+    .fund-lbl{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;font-family:'IBM Plex Mono',monospace}
+    .fund-val{font-size:.88rem;font-weight:600;font-family:'IBM Plex Mono',monospace;margin-top:2px}
+    .fund-val.g{color:var(--green)}.fund-val.y{color:var(--yellow)}.fund-val.r{color:var(--red)}
+
+    /* ─── Bias Banner ─── */
+    .bias-banner{display:flex;align-items:center;gap:12px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;margin-bottom:16px;flex-wrap:wrap}
+    .bias-badge{padding:4px 14px;border-radius:6px;font-size:.75rem;font-weight:700;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px}
+    .bias-bull{background:var(--green-dim);color:var(--green);border:1px solid var(--green)}
+    .bias-bear{background:var(--red-dim);color:var(--red);border:1px solid var(--red)}
+    .bias-neutral{background:var(--yellow-dim);color:var(--yellow);border:1px solid var(--yellow)}
+    .bias-info{font-size:.75rem;color:var(--muted2);font-family:'IBM Plex Mono',monospace}
+
+    /* ─── Status Bar ─── */
+    .status-bar{display:flex;align-items:center;justify-content:space-between;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;margin-bottom:16px;flex-wrap:wrap;gap:10px}
+    .status-info{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .status-controls{display:flex;gap:7px;flex-wrap:wrap}
+
+    /* ─── Cards ─── */
+    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin-bottom:16px}
+    .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px 18px;position:relative;overflow:hidden}
+    .card::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--ca,var(--border));border-radius:12px 12px 0 0}
+    .card.g{--ca:var(--green)}.card.r{--ca:var(--red)}.card.b{--ca:var(--blue)}.card.y{--ca:var(--yellow)}.card.p{--ca:var(--purple)}.card.o{--ca:var(--paper)}
+    .card-lbl{font-size:.65rem;color:var(--muted2);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;font-family:'IBM Plex Mono',monospace}
+    .card-val{font-size:1.55rem;font-weight:700;letter-spacing:-1px;line-height:1}
+    .card-sub{font-size:.68rem;color:var(--muted2);margin-top:5px}
+    .c-green{color:var(--green)}.c-red{color:var(--red)}.c-yellow{color:var(--yellow)}.c-blue{color:var(--blue)}.c-paper{color:var(--paper)}
+
+    /* ─── Grid ─── */
+    .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+    .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px}
+    @media(max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+
+    /* ─── Panel ─── */
+    .panel{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+    .panel.paper-panel{border-color:var(--paper)30}
+    .ph{padding:11px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .pt{font-size:.74rem;font-weight:600;text-transform:uppercase;letter-spacing:.8px}
+    .pb{padding:12px 16px}
+
+    /* ─── Table ─── */
+    table{width:100%;border-collapse:collapse;font-size:.76rem}
+    th{text-align:left;color:var(--muted);font-weight:500;font-family:'IBM Plex Mono',monospace;font-size:.63rem;text-transform:uppercase;letter-spacing:.8px;padding:0 8px 8px 0;border-bottom:1px solid var(--border)}
+    td{padding:9px 8px 9px 0;border-bottom:1px solid #0d1118;vertical-align:middle}
+    tr:last-child td{border-bottom:none}
+    tr:hover td{background:#0b0e14}
+
+    /* ─── Badges ─── */
+    .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.62rem;font-weight:700;font-family:'IBM Plex Mono',monospace}
+    .bb{background:var(--green-dim);color:var(--green)}.bs{background:var(--red-dim);color:var(--red)}.ba{background:var(--blue-dim);color:var(--blue)}.by{background:var(--yellow-dim);color:var(--yellow)}
+    .bp{background:var(--paper-dim);color:var(--paper);border:1px solid var(--paper)30}
+    .mono{font-family:'IBM Plex Mono',monospace}
+    .pg{color:var(--green);font-family:'IBM Plex Mono',monospace;font-weight:500}
+    .pr{color:var(--red);font-family:'IBM Plex Mono',monospace;font-weight:500}
+    .py{color:var(--yellow);font-family:'IBM Plex Mono',monospace;font-weight:500}
+    .pp{color:var(--paper);font-family:'IBM Plex Mono',monospace;font-weight:500}
+    .empty{text-align:center;padding:24px 0;color:var(--muted);font-size:.76rem}
+
+    /* ─── Watchlist ─── */
+    .wl-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #0d1118;font-size:.78rem}
+    .wl-row:last-child{border-bottom:none}
+    .wl-left{display:flex;flex-direction:column;gap:2px}
+    .wl-sym{font-weight:600;font-size:.82rem}
+    .wl-ex{font-size:.6rem;color:var(--muted2);font-family:'IBM Plex Mono',monospace}
+    .wl-indicators{display:flex;gap:8px;margin-top:3px}
+    .ind-chip{font-size:.6rem;font-family:'IBM Plex Mono',monospace;color:var(--muted2)}
+    .wl-right{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+    .wl-price{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:.84rem}
+    .wl-chg{font-size:.65rem;font-family:'IBM Plex Mono',monospace}
+
+    /* ─── Log ─── */
+    .log-list{list-style:none;display:flex;flex-direction:column;gap:5px;max-height:300px;overflow-y:auto}
+    .log-list::-webkit-scrollbar{width:3px}
+    .log-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+    .log-item{display:flex;gap:8px;font-size:.7rem;font-family:'IBM Plex Mono',monospace;padding:6px 9px;border-radius:6px;background:var(--bg3)}
+    .log-time{color:var(--muted);white-space:nowrap;flex-shrink:0;font-size:.65rem}
+    .log-msg{flex:1;word-break:break-all}
+    .log-item.buy .log-msg{color:var(--green)}.log-item.sell .log-msg{color:var(--red)}.log-item.alert .log-msg{color:var(--yellow)}.log-item.info .log-msg{color:var(--muted2)}
+
+    /* ─── Config ─── */
+    .cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px 18px}
+    .cfg-row{display:flex;flex-direction:column;gap:3px}
+    .cfg-lbl{font-size:.63rem;color:var(--muted2);text-transform:uppercase;letter-spacing:.8px;font-family:'IBM Plex Mono',monospace}
+    .cfg-inp{background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:7px;padding:7px 10px;font-size:.76rem;font-family:'IBM Plex Mono',monospace;outline:none;width:100%;transition:border-color .2s}
+    .cfg-inp:focus{border-color:var(--green)}
+    .cfg-inp.paper-inp:focus{border-color:var(--paper)}
+    select.cfg-inp option{background:var(--bg3)}
+
+    /* ─── Buttons ─── */
+    .br{display:flex;gap:7px;margin-top:12px;flex-wrap:wrap}
+    .btn{padding:8px 18px;border-radius:8px;border:none;font-size:.76rem;font-weight:600;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all .15s;white-space:nowrap}
+    .btn-g{background:var(--green);color:#000}.btn-g:hover{background:#00ff88;transform:translateY(-1px)}
+    .btn-g:disabled{background:#1a3d28;color:#2d5c40;cursor:not-allowed;transform:none}
+    .btn-r{background:transparent;color:var(--red);border:1px solid var(--red)}.btn-r:hover{background:var(--red-dim)}
+    .btn-ghost{background:transparent;color:var(--muted2);border:1px solid var(--border2)}.btn-ghost:hover{border-color:#3e4a60;color:var(--text)}
+    .btn-y{background:var(--yellow);color:#000}
+    .btn-b{background:var(--blue);color:#fff}
+    .btn-paper{background:var(--paper);color:#000}.btn-paper:hover{background:#ffb74d;transform:translateY(-1px)}
+    .btn-paper-r{background:transparent;color:var(--paper);border:1px solid var(--paper)}.btn-paper-r:hover{background:var(--paper-dim)}
+
+    /* ─── Performance ─── */
+    .perf-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    .perf-item{background:var(--bg3);border-radius:8px;padding:12px 14px}
+    .perf-lbl{font-size:.62rem;color:var(--muted2);text-transform:uppercase;letter-spacing:.7px;font-family:'IBM Plex Mono',monospace;margin-bottom:5px}
+    .perf-val{font-size:1.1rem;font-weight:700;font-family:'IBM Plex Mono',monospace}
+
+    /* ─── Indicator Panel ─── */
+    .ind-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #0d1118;font-size:.74rem}
+    .ind-row:last-child{border-bottom:none}
+    .ind-sym{font-weight:600;font-size:.76rem}
+    .ind-vals{display:flex;gap:12px;font-family:'IBM Plex Mono',monospace;font-size:.68rem}
+    .ind-val{display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+    .ind-val span:first-child{color:var(--muted2);font-size:.58rem;text-transform:uppercase}
+
+    /* ─── Strike badges ─── */
+    .strike-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:.63rem;font-family:'IBM Plex Mono',monospace;background:var(--red-dim);color:var(--red);border:1px solid var(--red)}
+
+    /* ─── Paper Capital Bar ─── */
+    .capital-bar{background:var(--bg3);border-radius:8px;padding:12px 16px;margin-bottom:12px}
+    .capital-row{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .capital-item{text-align:center}
+    .capital-lbl{font-size:.6rem;color:var(--muted2);text-transform:uppercase;letter-spacing:.8px;font-family:'IBM Plex Mono',monospace}
+    .capital-val{font-size:1.05rem;font-weight:700;font-family:'IBM Plex Mono',monospace;margin-top:3px}
+    .progress-bar{height:6px;background:var(--border);border-radius:3px;margin-top:8px;overflow:hidden}
+    .progress-fill{height:100%;border-radius:3px;transition:width .5s ease;background:var(--paper)}
+
+    /* ─── Paper Cards ─── */
+    .paper-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+    .paper-card{background:var(--bg2);border:1px solid var(--paper)30;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden}
+    .paper-card::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--paper);border-radius:10px 10px 0 0;opacity:.5}
+
+    /* ─── Paper Config ─── */
+    .paper-setup{background:linear-gradient(135deg,#1a0f00,#0f1215);border:1px solid var(--paper)40;border-radius:12px;padding:20px;margin-bottom:16px}
+    .paper-setup h3{font-size:.82rem;color:var(--paper);margin-bottom:14px;font-weight:700;text-transform:uppercase;letter-spacing:.8px}
+    .paper-cfg-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}
+    .paper-cfg-row:last-child{border-bottom:none}
+    .paper-cfg-lbl{font-size:.72rem;color:var(--muted2)}
+    .paper-cfg-val{font-family:'IBM Plex Mono',monospace;font-size:.76rem;color:var(--paper)}
+
+    /* ─── Comparison Panel ─── */
+    .compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+    .compare-header{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+    .compare-dot{width:8px;height:8px;border-radius:50%}
+    .compare-title{font-size:.8rem;font-weight:700}
+    .compare-pnl{font-size:1.5rem;font-weight:700;font-family:'IBM Plex Mono',monospace;margin-bottom:4px}
+    .compare-detail{font-size:.68rem;color:var(--muted2);font-family:'IBM Plex Mono',monospace}
+
+    footer{margin-top:30px;padding-top:16px;border-top:1px solid var(--border);font-size:.67rem;color:var(--muted);text-align:center}
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <div class="logo-text">
+        <h1>ZeroBot Pro</h1>
+        <p>VWAP-EMA Hybrid · pykiteconnect · Zerodha</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="pill"><div class="dot" id="mktDot"></div><span id="mktStatus">Checking</span></div>
+      <div class="pill" id="paperModePill" style="display:none;border-color:var(--paper)">
+        <div class="dot paper-live"></div><span style="color:var(--paper)">PAPER ON</span>
+      </div>
+      <div class="pill"><span id="clockEl">--:--:--</span></div>
+    </div>
+  </header>
+
+  <!-- Login Banner -->
+  {% if login_needed %}
+  <div class="login-banner">
+    <h2>Zerodha Login Required</h2>
+    <p>Authenticate to enable live trading and real-time data.</p>
+    <a href="{{ login_url }}" target="_blank" class="btn btn-b" style="text-decoration:none">Open Kite Login →</a>
+    <form class="token-form" method="POST" action="/auth">
+      <input class="token-input" name="request_token" placeholder="Paste request_token here..." required>
+      <button type="submit" class="btn btn-g">Authenticate</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <!-- Profile Strip -->
+  <div class="profile-strip" id="profileStrip" style="display:none">
+    <div class="avatar" id="profileAvatar">?</div>
+    <div class="profile-info">
+      <div class="profile-name" id="profileName">—</div>
+      <div class="profile-sub" id="profileSub">—</div>
+      <div class="profile-tags" id="profileTags"></div>
+    </div>
+    <div class="funds-grid">
+      <div class="fund-item"><div class="fund-lbl">Available</div><div class="fund-val g" id="fAvail">—</div></div>
+      <div class="fund-item"><div class="fund-lbl">Used</div><div class="fund-val y" id="fUsed">—</div></div>
+      <div class="fund-item"><div class="fund-lbl">Net Balance</div><div class="fund-val" id="fNet">—</div></div>
+    </div>
+  </div>
+
+  <!-- Market Bias Banner -->
+  <div class="bias-banner">
+    <span class="bias-badge bias-neutral" id="biasBadge">NEUTRAL</span>
+    <span class="bias-info" id="biasInfo">Waiting for market data...</span>
+    <span class="bias-info" style="margin-left:auto" id="mtmInfo">MTM: —</span>
+  </div>
+
+  <!-- Tab Navigation -->
+  <div class="tab-nav">
+    <button class="tab-btn active" onclick="switchTab('live',this)">📈 Live Trading</button>
+    <button class="tab-btn paper-tab" onclick="switchTab('paper',this)">🎯 Paper Trading</button>
+    <button class="tab-btn" onclick="switchTab('compare',this)">⚖️ Compare</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       LIVE TRADING TAB
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="tab-content active" id="tab-live">
+
+    <!-- Bot Status Bar -->
+    <div class="status-bar">
+      <div class="status-info">
+        <div class="pill"><div class="dot" id="botDot"></div><span id="botTxt">Stopped</span></div>
+        <span style="font-size:.76rem;font-weight:600" id="botMode">Mode: —</span>
+        <span style="font-size:.72rem;color:var(--muted2)" id="botStats">—</span>
+        <div id="strikesArea"></div>
+      </div>
+      <div class="status-controls">
+        <button class="btn btn-g" id="btnStart" onclick="botStart()">▶ Start</button>
+        <button class="btn btn-ghost" id="btnStop" onclick="botStop()" disabled>■ Stop</button>
+        <button class="btn btn-r" onclick="squareOff()">⊠ Square Off</button>
+        <button class="btn btn-ghost" id="btnReset" onclick="resetHalt()" style="display:none">↺ Reset</button>
+      </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="cards">
+      <div class="card g"><div class="card-lbl">Daily P&amp;L</div><div class="card-val" id="cPnl">₹0.00</div><div class="card-sub" id="cPnlSub">0 trades</div></div>
+      <div class="card b"><div class="card-lbl">MTM P&amp;L</div><div class="card-val" id="cMtm">₹0.00</div><div class="card-sub">Live unrealized</div></div>
+      <div class="card y"><div class="card-lbl">Open Positions</div><div class="card-val" id="cPos">0</div><div class="card-sub">Max <span id="maxPos">3</span></div></div>
+      <div class="card p"><div class="card-lbl">Trades Today</div><div class="card-val" id="cTrades">0</div><div class="card-sub">Max <span id="maxTrades">6</span></div></div>
+      <div class="card r"><div class="card-lbl">Loss Limit</div><div class="card-val" id="cLimit">₹3,000</div><div class="card-sub" id="cLimitSub">—</div></div>
+      <div class="card g"><div class="card-lbl">Win Rate</div><div class="card-val" id="cWinRate">—%</div><div class="card-sub" id="cWinSub">0W / 0L</div></div>
+    </div>
+
+    <!-- Positions + Watchlist -->
+    <div class="g2">
+      <div class="panel">
+        <div class="ph"><span class="pt">Open Positions</span><span class="pill" id="posCount" style="font-size:.65rem">0 open</span></div>
+        <div class="pb">
+          <table>
+            <thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>LTP</th><th>SL</th><th>TP</th><th>P&amp;L</th></tr></thead>
+            <tbody id="posTbody"><tr><td colspan="8" class="empty">No open positions</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="ph"><span class="pt">Watchlist + Indicators</span><div class="pill" style="font-size:.63rem"><div class="dot live"></div>Live</div></div>
+        <div class="pb" id="wlBody"><div class="empty">Waiting...</div></div>
+      </div>
+    </div>
+
+    <!-- Indicator Table + Activity Log -->
+    <div class="g2">
+      <div class="panel">
+        <div class="ph"><span class="pt">Technical Indicators</span></div>
+        <div class="pb" id="indBody"><div class="empty">No data yet</div></div>
+      </div>
+      <div class="panel">
+        <div class="ph">
+          <span class="pt">Activity Log</span>
+          <button class="btn btn-ghost" style="padding:3px 10px;font-size:.68rem" onclick="clearLog()">Clear</button>
+        </div>
+        <div class="pb">
+          <ul class="log-list" id="logList">
+            <li class="log-item info"><span class="log-time">--:--:--</span><span class="log-msg">Connecting to ZeroBot...</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Config + Performance -->
+    <div class="g2">
+      <div class="panel">
+        <div class="ph"><span class="pt">Strategy Config</span></div>
+        <div class="pb">
+          <div class="cfg-grid">
+            <div class="cfg-row"><label class="cfg-lbl">Mode</label>
+              <select class="cfg-inp" id="cfgMode"><option value="hybrid">hybrid (recommended)</option><option value="margin">margin only</option><option value="arbitrage">arbitrage only</option></select>
+            </div>
+            <div class="cfg-row"><label class="cfg-lbl">Take Profit %</label><input class="cfg-inp" id="cfgTP" type="number" step="0.1" value="1.5"></div>
+            <div class="cfg-row"><label class="cfg-lbl">Stop Loss %</label><input class="cfg-inp" id="cfgSL" type="number" step="0.05" value="0.35"></div>
+            <div class="cfg-row"><label class="cfg-lbl">Risk Per Trade %</label><input class="cfg-inp" id="cfgRisk" type="number" step="0.1" value="0.5"></div>
+            <div class="cfg-row"><label class="cfg-lbl">VWAP Buffer %</label><input class="cfg-inp" id="cfgVwap" type="number" step="0.01" value="0.15"></div>
+            <div class="cfg-row"><label class="cfg-lbl">RSI Entry Level</label><input class="cfg-inp" id="cfgRsi" type="number" step="1" value="45"></div>
+            <div class="cfg-row"><label class="cfg-lbl">Max Daily Loss ₹</label><input class="cfg-inp" id="cfgLoss" type="number" step="500" value="3000"></div>
+            <div class="cfg-row"><label class="cfg-lbl">Max Trades / Day</label><input class="cfg-inp" id="cfgTrades" type="number" step="1" value="6"></div>
+          </div>
+          <div class="br">
+            <button class="btn btn-g" onclick="applyConfig()">Apply Config</button>
+            <button class="btn btn-ghost" onclick="resetConfig()">Reset</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="ph"><span class="pt">Performance Summary</span><button class="btn btn-ghost" style="padding:3px 10px;font-size:.68rem" onclick="loadPerf()">Refresh</button></div>
+        <div class="pb">
+          <div class="perf-grid" id="perfGrid">
+            <div class="perf-item"><div class="perf-lbl">Total Trades</div><div class="perf-val" id="pTotal">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Win Rate</div><div class="perf-val c-green" id="pWinRate">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Wins / Losses</div><div class="perf-val" id="pWL">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Gross P&amp;L</div><div class="perf-val" id="pGross">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Brokerage Paid</div><div class="perf-val c-red" id="pBrok">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Net P&amp;L</div><div class="perf-val" id="pNet">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Best Trade</div><div class="perf-val c-green" id="pBest">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Worst Trade</div><div class="perf-val c-red" id="pWorst">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Avg Win</div><div class="perf-val c-green" id="pAvgW">—</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trade History -->
+    <div class="panel" style="margin-bottom:16px">
+      <div class="ph">
+        <span class="pt">Trade History</span>
+        <button class="btn btn-ghost" style="padding:3px 10px;font-size:.68rem" onclick="loadTrades()">Refresh</button>
+      </div>
+      <div class="pb">
+        <table>
+          <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>SL</th><th>TP</th><th>Bias</th><th>Order ID</th></tr></thead>
+          <tbody id="tradeTbody"><tr><td colspan="9" class="empty">No trades yet</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /tab-live -->
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       PAPER TRADING TAB
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-paper">
+
+    <!-- Paper Control Banner -->
+    <div class="paper-banner">
+      <div class="paper-banner-left">
+        <div class="paper-icon">🎯</div>
+        <div>
+          <div class="paper-title">Paper Trading Mode</div>
+          <div class="paper-sub" id="paperStatusSub">Disabled — enable to start simulating with live market data</div>
+        </div>
+      </div>
+      <div class="paper-controls">
+        <button class="btn btn-paper" id="btnPaperEnable" onclick="enablePaper()">▶ Enable Paper</button>
+        <button class="btn btn-paper-r" id="btnPaperDisable" onclick="disablePaper()" style="display:none">■ Disable</button>
+        <button class="btn btn-ghost" id="btnPaperReset" onclick="resetPaper()">↺ Reset</button>
+        <button class="btn btn-r" id="btnPaperSqOff" onclick="paperSquareOff()">⊠ Square Off</button>
+      </div>
+    </div>
+
+    <!-- Capital Setup -->
+    <div class="paper-setup">
+      <h3>💰 Capital &amp; Config Setup</h3>
+      <div class="cfg-grid">
+        <div class="cfg-row">
+          <label class="cfg-lbl">Starting Capital ₹</label>
+          <input class="cfg-inp paper-inp" id="pCfgCapital" type="number" step="10000" value="200000">
+        </div>
+        <div class="cfg-row">
+          <label class="cfg-lbl">Mode</label>
+          <select class="cfg-inp paper-inp" id="pCfgMode">
+            <option value="hybrid">hybrid</option>
+            <option value="margin">margin only</option>
+            <option value="arbitrage">arbitrage only</option>
+          </select>
+        </div>
+        <div class="cfg-row"><label class="cfg-lbl">Take Profit %</label><input class="cfg-inp paper-inp" id="pCfgTP" type="number" step="0.1" value="1.5"></div>
+        <div class="cfg-row"><label class="cfg-lbl">Stop Loss %</label><input class="cfg-inp paper-inp" id="pCfgSL" type="number" step="0.05" value="0.35"></div>
+        <div class="cfg-row"><label class="cfg-lbl">Risk Per Trade %</label><input class="cfg-inp paper-inp" id="pCfgRisk" type="number" step="0.1" value="0.5"></div>
+        <div class="cfg-row"><label class="cfg-lbl">Max Daily Loss ₹</label><input class="cfg-inp paper-inp" id="pCfgLoss" type="number" step="500" value="3000"></div>
+        <div class="cfg-row"><label class="cfg-lbl">RSI Entry Level</label><input class="cfg-inp paper-inp" id="pCfgRsi" type="number" step="1" value="45"></div>
+        <div class="cfg-row"><label class="cfg-lbl">Max Trades / Day</label><input class="cfg-inp paper-inp" id="pCfgTrades" type="number" step="1" value="6"></div>
+      </div>
+      <div class="br">
+        <button class="btn btn-paper" onclick="applyPaperConfig()">Apply Paper Config</button>
+        <button class="btn btn-ghost" onclick="resetPaperConfigForm()">Reset Form</button>
+      </div>
+    </div>
+
+    <!-- Capital Bar -->
+    <div class="capital-bar" id="capitalBar">
+      <div class="capital-row">
+        <div class="capital-item">
+          <div class="capital-lbl">Starting Capital</div>
+          <div class="capital-val" id="pCapStart">₹2,00,000</div>
+        </div>
+        <div class="capital-item">
+          <div class="capital-lbl">Current Capital</div>
+          <div class="capital-val c-paper" id="pCapCurrent">₹2,00,000</div>
+        </div>
+        <div class="capital-item">
+          <div class="capital-lbl">Return</div>
+          <div class="capital-val" id="pCapReturn">0.00%</div>
+        </div>
+        <div class="capital-item">
+          <div class="capital-lbl">Net P&amp;L</div>
+          <div class="capital-val" id="pCapPnl">₹0.00</div>
+        </div>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="capitalProgress" style="width:100%"></div></div>
+    </div>
+
+    <!-- Paper Summary Cards -->
+    <div class="paper-cards">
+      <div class="paper-card"><div class="card-lbl">Daily P&amp;L</div><div class="card-val" id="pcPnl" style="font-size:1.4rem">₹0.00</div><div class="card-sub" id="pcPnlSub">—</div></div>
+      <div class="paper-card"><div class="card-lbl">MTM P&amp;L</div><div class="card-val" id="pcMtm" style="font-size:1.4rem">₹0.00</div><div class="card-sub">Unrealized</div></div>
+      <div class="paper-card"><div class="card-lbl">Open Positions</div><div class="card-val c-paper" id="pcPos" style="font-size:1.4rem">0</div><div class="card-sub">Paper</div></div>
+      <div class="paper-card"><div class="card-lbl">Trade Count</div><div class="card-val c-paper" id="pcTrades" style="font-size:1.4rem">0</div><div class="card-sub">Today</div></div>
+      <div class="paper-card"><div class="card-lbl">Win Rate</div><div class="card-val" id="pcWinRate" style="font-size:1.4rem">—%</div><div class="card-sub" id="pcWL">0W / 0L</div></div>
+      <div class="paper-card"><div class="card-lbl">Market Bias</div><div class="card-val" id="pcBias" style="font-size:.9rem;letter-spacing:0">NEUTRAL</div><div class="card-sub">Current regime</div></div>
+    </div>
+
+    <!-- Paper Positions + Log -->
+    <div class="g2">
+      <div class="panel paper-panel">
+        <div class="ph">
+          <span class="pt" style="color:var(--paper)">Paper Positions</span>
+          <span class="badge bp" id="paperPosCount">0 open</span>
+        </div>
+        <div class="pb">
+          <table>
+            <thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>LTP</th><th>SL</th><th>TP</th><th>P&amp;L</th></tr></thead>
+            <tbody id="paperPosTbody"><tr><td colspan="8" class="empty">No paper positions</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel paper-panel">
+        <div class="ph">
+          <span class="pt" style="color:var(--paper)">Paper Activity Log</span>
+          <button class="btn btn-ghost" style="padding:3px 10px;font-size:.68rem" onclick="clearPaperLog()">Clear</button>
+        </div>
+        <div class="pb">
+          <ul class="log-list" id="paperLogList">
+            <li class="log-item info"><span class="log-time">--:--:--</span><span class="log-msg">Paper trading ready...</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Paper Performance -->
+    <div class="panel paper-panel" style="margin-bottom:14px">
+      <div class="ph">
+        <span class="pt" style="color:var(--paper)">Paper Performance</span>
+        <button class="btn btn-ghost" style="padding:3px 10px;font-size:.68rem" onclick="loadPaperState()">Refresh</button>
+      </div>
+      <div class="pb">
+        <div class="perf-grid">
+          <div class="perf-item"><div class="perf-lbl">Total Trades</div><div class="perf-val c-paper" id="ppTotal">—</div></div>
+          <div class="perf-item"><div class="perf-lbl">Win Rate</div><div class="perf-val c-green" id="ppWinRate">—</div></div>
+          <div class="perf-item"><div class="perf-lbl">Wins / Losses</div><div class="perf-val" id="ppWL">—</div></div>
+          <div class="perf-item"><div class="perf-lbl">Gross P&amp;L</div><div class="perf-val" id="ppGross">—</div></div>
+          <div class="perf-item"><div class="perf-lbl">Brokerage (Sim)</div><div class="perf-val c-red" id="ppBrok">—</div></div>
+          <div class="perf-item"><div class="perf-lbl">Net P&amp;L</div><div class="perf-val" id="ppNet">—</div></div>
+          <div class="perf-item"><div class="perf-lbl">Best Trade</div><div class="perf-val c-green" id="ppBest">—</div></div>
+          <div class="perf-item"><div class="perf-lbl">Worst Trade</div><div class="perf-val c-red" id="ppWorst">—</div></div>
+          <div class="perf-item"><div class="perf-lbl">Return %</div><div class="perf-val" id="ppReturn">—</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Paper Trade History -->
+    <div class="panel paper-panel" style="margin-bottom:14px">
+      <div class="ph">
+        <span class="pt" style="color:var(--paper)">Paper Trade History</span>
+        <button class="btn btn-ghost" style="padding:3px 10px;font-size:.68rem" onclick="loadPaperTrades()">Refresh</button>
+      </div>
+      <div class="pb">
+        <table>
+          <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>SL</th><th>TP</th><th>Bias</th><th>Order ID</th></tr></thead>
+          <tbody id="paperTradeTbody"><tr><td colspan="9" class="empty">No paper trades yet</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Strike Tracker -->
+    <div class="panel paper-panel" style="margin-bottom:14px">
+      <div class="ph"><span class="pt" style="color:var(--paper)">Two-Strike Rule Tracker</span></div>
+      <div class="pb" id="paperStrikesPanel">
+        <div class="empty">No strikes — all symbols clear</div>
+      </div>
+    </div>
+
+  </div><!-- /tab-paper -->
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       COMPARE TAB
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-compare">
+
+    <!-- Side-by-side PnL -->
+    <div class="compare-grid" style="margin-bottom:14px">
+      <div class="panel">
+        <div class="ph"><span class="pt">Live Trading</span></div>
+        <div class="pb">
+          <div class="compare-header">
+            <div class="compare-dot" style="background:var(--green)"></div>
+            <div class="compare-title">Live Account</div>
+          </div>
+          <div class="compare-pnl" id="compLivePnl">₹0.00</div>
+          <div class="compare-detail" id="compLiveDetail">0 trades · 0 open</div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+          <div class="perf-grid" style="grid-template-columns:1fr 1fr">
+            <div class="perf-item"><div class="perf-lbl">Win Rate</div><div class="perf-val c-green" id="compLiveWR">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Net P&amp;L</div><div class="perf-val" id="compLiveNet">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Best</div><div class="perf-val c-green" id="compLiveBest">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Worst</div><div class="perf-val c-red" id="compLiveWorst">—</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="ph"><span class="pt" style="color:var(--paper)">Paper Trading</span></div>
+        <div class="pb">
+          <div class="compare-header">
+            <div class="compare-dot" style="background:var(--paper)"></div>
+            <div class="compare-title" style="color:var(--paper)">Paper Account</div>
+          </div>
+          <div class="compare-pnl" id="compPaperPnl" style="color:var(--paper)">₹0.00</div>
+          <div class="compare-detail" id="compPaperDetail">0 trades · 0 open</div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+          <div class="perf-grid" style="grid-template-columns:1fr 1fr">
+            <div class="perf-item"><div class="perf-lbl">Win Rate</div><div class="perf-val c-green" id="compPaperWR">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Net P&amp;L</div><div class="perf-val" id="compPaperNet">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Best</div><div class="perf-val c-green" id="compPaperBest">—</div></div>
+            <div class="perf-item"><div class="perf-lbl">Worst</div><div class="perf-val c-red" id="compPaperWorst">—</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Signal Alignment Table -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="ph">
+        <span class="pt">Signal Alignment</span>
+        <span style="font-size:.68rem;color:var(--muted2)">Live data vs Paper signals on same watchlist</span>
+      </div>
+      <div class="pb">
+        <table>
+          <thead><tr><th>Symbol</th><th>LTP</th><th>VWAP</th><th>RSI</th><th>Bias</th><th>Live Pos</th><th>Paper Pos</th><th>Sync</th></tr></thead>
+          <tbody id="compareAlignTbody"><tr><td colspan="8" class="empty">Loading signal data...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Strategy Insights -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="ph"><span class="pt">Strategy Insights</span></div>
+      <div class="pb" id="strategyInsights">
+        <div class="empty">Enable paper trading and run some trades to see insights</div>
+      </div>
+    </div>
+
+  </div><!-- /tab-compare -->
+
+  <footer>
+    ZeroBot Pro · VWAP-EMA Hybrid Strategy · Zerodha + pykiteconnect ·
+    <a href="https://kite.trade/docs/connect/v3/" style="color:var(--blue)" target="_blank">API Docs</a>
+    · Educational use only · Trading involves risk
+  </footer>
+</div>
+
+<script>
+// ─── Globals ───────────────────────────────────────────────────────────────────
+const fmt  = n => Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtP = n => `₹${fmt(n)}`;
+const pctCls = v => v>=0?'pg':'pr';
+let authenticated = {{ 'false' if login_needed else 'true' }};
+let liveState  = {};
+let paperState = {};
+
+// ─── Tab Switch ────────────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  btn.classList.add('active');
+  if(name==='compare') renderCompare();
+}
+
+// ─── Clock ────────────────────────────────────────────────────────────────────
+function updateClock(){
+  const now = new Date();
+  document.getElementById('clockEl').textContent = now.toLocaleTimeString('en-IN',{hour12:false});
+  const h=now.getHours(),m=now.getMinutes();
+  const open=(h>9||(h===9&&m>=15))&&(h<15||(h===15&&m<=25));
+  document.getElementById('mktDot').className='dot '+(open?'live':'');
+  document.getElementById('mktStatus').textContent=open?'MARKET OPEN':'MARKET CLOSED';
+}
+
+// ─── Main Poll ────────────────────────────────────────────────────────────────
+async function poll(){
+  try{
+    const r=await fetch('/api/state');
+    liveState=await r.json();
+    renderLive(liveState);
+  }catch(e){console.error(e)}
+}
+
+async function pollPaper(){
+  try{
+    const r=await fetch('/api/paper/state');
+    paperState=await r.json();
+    renderPaper(paperState);
+    // Show pill in header if enabled
+    document.getElementById('paperModePill').style.display=paperState.enabled?'flex':'none';
+  }catch(e){console.error(e)}
+}
+
+// ─── LIVE Render ──────────────────────────────────────────────────────────────
+function renderLive(d){
+  renderProfile(d.profile,d.funds);
+  renderBias(d);
+  renderStatus(d);
+  renderCards(d);
+  renderPositions(d.open_positions);
+  renderWatchlist(d.watchlist);
+  renderIndicators(d.indicators,d.watchlist);
+  renderLog(d.logs);
+  syncConfig(d.config,d.risk);
+}
+
+function renderProfile(p,f){
+  if(!p?.name) return;
+  document.getElementById('profileStrip').style.display='flex';
+  const name=p.name||'Trader';
+  document.getElementById('profileAvatar').textContent=name[0].toUpperCase();
+  document.getElementById('profileName').textContent=name;
+  document.getElementById('profileSub').textContent=`${p.user_id} · ${p.broker} · ${p.user_type||'individual'}`;
+  const tags=[...(p.exchanges||[]),...(p.products||[])];
+  document.getElementById('profileTags').innerHTML=tags.map(t=>`<span class="tag">${t}</span>`).join('');
+  if(f&&f.equity_available!==undefined){
+    document.getElementById('fAvail').textContent=fmtP(f.equity_available);
+    document.getElementById('fUsed').textContent=fmtP(f.equity_used);
+    const net=f.equity_total;
+    const el=document.getElementById('fNet');
+    el.textContent=fmtP(Math.abs(net));
+    el.className='fund-val '+(net>=0?'g':'r');
+  }
+}
+
+function renderBias(d){
+  const badge=document.getElementById('biasBadge');
+  const info=document.getElementById('biasInfo');
+  const mtm=document.getElementById('mtmInfo');
+  const bias=d.market_bias||'NEUTRAL';
+  badge.textContent=bias;
+  badge.className='bias-badge '+(bias.includes('BULL')?'bias-bull':bias.includes('BEAR')?'bias-bear':'bias-neutral');
+  const nifty=d.watchlist?.find(w=>w.sym==='NIFTY 50')||{};
+  info.textContent=`NIFTY VWAP:${fmtP(nifty.vwap||0)} EMA20:${fmtP(nifty.ema20||0)} RSI:${(nifty.rsi||0).toFixed(1)}`;
+  const mtmVal=d.mtm_pnl||0;
+  mtm.textContent=`MTM: ${fmtP(mtmVal)}`;
+  mtm.className='bias-info '+(mtmVal>=0?'pg':'pr');
+}
+
+function renderStatus(d){
+  const dot=document.getElementById('botDot');
+  const txt=document.getElementById('botTxt');
+  const stats=document.getElementById('botStats');
+  const bStart=document.getElementById('btnStart');
+  const bStop=document.getElementById('btnStop');
+  const bReset=document.getElementById('btnReset');
+  document.getElementById('botMode').textContent=`Mode: ${d.config?.mode||'—'}`;
+  stats.textContent=`Trades:${d.trade_count} | Positions:${d.open_positions?.length||0} | Daily:${fmtP(d.daily_pnl)}`;
+  if(d.halted||d.market_stop){
+    dot.className='dot halt'; txt.textContent=d.market_stop?'CIRCUIT BREAKER':'HALTED';
+    bReset.style.display='inline-block';
+  } else if(d.bot_running){
+    dot.className='dot live'; txt.textContent='Running'; bReset.style.display='none';
+  } else {
+    dot.className='dot'; txt.textContent='Stopped'; bReset.style.display='none';
+  }
+  bStart.disabled=d.bot_running||d.halted||d.market_stop||!d.authenticated;
+  bStop.disabled=!d.bot_running;
+  const strikes=d.strike_count||{};
+  const area=document.getElementById('strikesArea');
+  area.innerHTML=Object.entries(strikes).filter(([_,v])=>v>0)
+    .map(([sym,n])=>`<span class="strike-badge">⚡${sym}:${n}/2</span>`).join('');
+}
+
+function renderCards(d){
+  const pnl=d.daily_pnl||0;
+  const mtm=d.mtm_pnl||0;
+  const perf=d.performance||{};
+  const wins=perf.wins||0;
+  const total=perf.total_trades||0;
+  const wr=total>0?(wins/total*100).toFixed(1):'—';
+  const pEl=document.getElementById('cPnl');
+  pEl.textContent=fmtP(Math.abs(pnl));
+  pEl.className='card-val '+(pnl>=0?'c-green':'c-red');
+  document.getElementById('cPnlSub').textContent=`${d.trade_count} closed trades`;
+  const mEl=document.getElementById('cMtm');
+  mEl.textContent=fmtP(Math.abs(mtm));
+  mEl.className='card-val '+(mtm>=0?'c-green':'c-red');
+  document.getElementById('cPos').textContent=d.open_positions?.length||0;
+  document.getElementById('maxPos').textContent=d.risk?.max_open_positions||3;
+  document.getElementById('cTrades').textContent=d.trade_count||0;
+  document.getElementById('maxTrades').textContent=d.config?.max_trades_per_day||6;
+  document.getElementById('cLimit').textContent=fmtP(d.risk?.max_daily_loss||3000);
+  const rem=Math.max(0,(d.risk?.max_daily_loss||3000)+Math.min(pnl,0));
+  document.getElementById('cLimitSub').textContent=`Remaining: ${fmtP(rem)}`;
+  document.getElementById('cWinRate').textContent=wr==='—'?'—%':`${wr}%`;
+  document.getElementById('cWinSub').textContent=`${wins}W / ${(perf.losses||0)}L`;
+}
+
+function renderPositions(pos){
+  const b=document.getElementById('posTbody');
+  document.getElementById('posCount').textContent=`${pos?.length||0} open`;
+  if(!pos?.length){b.innerHTML=`<tr><td colspan="8" class="empty">No open positions</td></tr>`;return;}
+  b.innerHTML=pos.map(p=>{
+    const pc=p.pnl>=0?'pg':'pr';
+    const badge=p.type==='ARB'?`<span class="badge ba">ARB</span>`:p.side==='BUY'?`<span class="badge bb">BUY</span>`:`<span class="badge bs">SELL</span>`;
+    return `<tr><td><b>${p.sym}</b></td><td>${badge}</td><td class="mono">${p.qty}</td><td class="mono">${fmtP(p.entry)}</td><td class="mono">${fmtP(p.ltp)}</td><td class="mono pr">${fmtP(p.sl)}</td><td class="mono pg">${fmtP(p.tp)}</td><td class="${pc}">${fmtP(p.pnl)}</td></tr>`;
+  }).join('');
+}
+
+function renderWatchlist(wl){
+  const b=document.getElementById('wlBody');
+  if(!wl?.length){b.innerHTML=`<div class="empty">No data</div>`;return;}
+  b.innerHTML=wl.map(w=>{
+    const chg=w.chg||0;
+    const cls=chg>=0?'pg':'pr';
+    const sign=chg>=0?'+':'';
+    const price=w.ltp>0?fmtP(w.ltp):'—';
+    const biasCls=w.bias?.includes('BULL')?'pg':w.bias?.includes('BEAR')?'pr':'py';
+    return `<div class="wl-row">
+      <div class="wl-left">
+        <div><span class="wl-sym">${w.sym}</span> <span class="wl-ex">${w.ex}</span></div>
+        <div class="wl-indicators">
+          <span class="ind-chip">V:${fmtP(w.vwap||0)}</span>
+          <span class="ind-chip">E20:${fmtP(w.ema20||0)}</span>
+          <span class="ind-chip">RSI:${(w.rsi||0).toFixed(0)}</span>
+          <span class="ind-chip ${biasCls}">${w.bias||'—'}</span>
+        </div>
+      </div>
+      <div class="wl-right">
+        <span class="wl-price">${price}</span>
+        <span class="wl-chg ${cls}">${sign}${chg.toFixed(2)}%</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderIndicators(ind,wl){
+  const b=document.getElementById('indBody');
+  if(!ind||!Object.keys(ind).length){b.innerHTML=`<div class="empty">No indicator data</div>`;return;}
+  b.innerHTML=Object.entries(ind).map(([sym,i])=>{
+    const biasCls=i.bias?.includes('BULL')?'pg':i.bias?.includes('BEAR')?'pr':'py';
+    return `<div class="ind-row">
+      <span class="ind-sym">${sym}</span>
+      <div class="ind-vals">
+        <div class="ind-val"><span>VWAP</span><span>${fmtP(i.vwap||0)}</span></div>
+        <div class="ind-val"><span>EMA9</span><span>${fmtP(i.ema9||0)}</span></div>
+        <div class="ind-val"><span>EMA20</span><span>${fmtP(i.ema20||0)}</span></div>
+        <div class="ind-val"><span>RSI</span><span class="${(i.rsi||50)>70?'pr':(i.rsi||50)<35?'pg':'py'}">${(i.rsi||0).toFixed(1)}</span></div>
+        <div class="ind-val"><span>ATR</span><span>${fmtP(i.atr||0)}</span></div>
+        <div class="ind-val"><span>BIAS</span><span class="${biasCls}">${i.bias||'—'}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderLog(logs){
+  if(!logs?.length) return;
+  document.getElementById('logList').innerHTML=
+    [...logs].reverse().map(l=>`<li class="log-item ${l.type}"><span class="log-time">${l.time}</span><span class="log-msg">${l.msg}</span></li>`).join('');
+}
+
+function clearLog(){document.getElementById('logList').innerHTML=`<li class="log-item info"><span class="log-time">--:--:--</span><span class="log-msg">Cleared</span></li>`;}
+
+// ─── PAPER Render ─────────────────────────────────────────────────────────────
+function renderPaper(p){
+  if(!p) return;
+
+  // Banner status
+  const sub=document.getElementById('paperStatusSub');
+  const btnEn=document.getElementById('btnPaperEnable');
+  const btnDis=document.getElementById('btnPaperDisable');
+  if(p.enabled){
+    sub.textContent=p.halted?'⚠ HALTED — daily loss limit reached':'● Active — simulating trades with live market data';
+    btnEn.style.display='none'; btnDis.style.display='inline-block';
+  } else {
+    sub.textContent='Disabled — enable to start simulating with live market data';
+    btnEn.style.display='inline-block'; btnDis.style.display='none';
+  }
+
+  // Capital bar
+  const perf=p.performance||{};
+  const start=perf.starting_capital||200000;
+  const current=perf.current_capital||200000;
+  const ret=perf.return_pct||0;
+  const netPnl=perf.net_pnl||0;
+  document.getElementById('pCapStart').textContent=fmtP(start);
+  document.getElementById('pCapCurrent').textContent=fmtP(current);
+  const retEl=document.getElementById('pCapReturn');
+  retEl.textContent=(ret>=0?'+':'')+ret.toFixed(2)+'%';
+  retEl.className='capital-val '+(ret>=0?'pg':'pr');
+  const pnlEl=document.getElementById('pCapPnl');
+  pnlEl.textContent=fmtP(netPnl);
+  pnlEl.className='capital-val '+(netPnl>=0?'pg':'pr');
+  // Progress bar shows capital left (min 0, max start)
+  const pct=Math.min(100,Math.max(0,(current/start)*100));
+  document.getElementById('capitalProgress').style.width=pct+'%';
+  document.getElementById('capitalProgress').style.background=current>=start?'var(--green)':current>start*0.9?'var(--yellow)':'var(--red)';
+
+  // Summary cards
+  const dpnl=p.daily_pnl||0;
+  const mtm=p.mtm_pnl||0;
+  const el1=document.getElementById('pcPnl');
+  el1.textContent=fmtP(Math.abs(dpnl));
+  el1.className='card-val '+(dpnl>=0?'c-paper':'c-red');
+  document.getElementById('pcPnlSub').textContent=(dpnl>=0?'+':'')+dpnl.toFixed(2);
+  const el2=document.getElementById('pcMtm');
+  el2.textContent=fmtP(Math.abs(mtm));
+  el2.className='card-val '+(mtm>=0?'c-paper':'c-red');
+  document.getElementById('pcPos').textContent=p.open_positions?.length||0;
+  document.getElementById('pcTrades').textContent=p.trade_count||0;
+  const t=perf.total_trades||0;
+  const w=perf.wins||0;
+  const wrPct=t>0?(w/t*100).toFixed(1)+'%':'—%';
+  document.getElementById('pcWinRate').textContent=wrPct;
+  document.getElementById('pcWL').textContent=`${w}W / ${perf.losses||0}L`;
+  const biasEl=document.getElementById('pcBias');
+  const bias=p.market_bias||'NEUTRAL';
+  biasEl.textContent=bias;
+  biasEl.className='card-val '+(bias.includes('BULL')?'c-green':bias.includes('BEAR')?'c-red':'c-yellow');
+
+  // Positions
+  const pos=p.open_positions||[];
+  const posB=document.getElementById('paperPosTbody');
+  document.getElementById('paperPosCount').textContent=`${pos.length} open`;
+  if(!pos.length){posB.innerHTML=`<tr><td colspan="8" class="empty">No paper positions</td></tr>`;}
+  else{
+    posB.innerHTML=pos.map(p=>{
+      const pc=p.pnl>=0?'pg':'pr';
+      const badge=`<span class="badge bp">BUY</span>`;
+      return `<tr><td><b>${p.sym}</b></td><td>${badge}</td><td class="mono">${p.qty}</td><td class="mono">${fmtP(p.entry)}</td><td class="mono">${fmtP(p.ltp)}</td><td class="mono pr">${fmtP(p.sl)}</td><td class="mono pg">${fmtP(p.tp)}</td><td class="${pc}">${fmtP(p.pnl)}</td></tr>`;
+    }).join('');
+  }
+
+  // Log
+  const logs=p.logs||[];
+  if(logs.length){
+    document.getElementById('paperLogList').innerHTML=
+      [...logs].reverse().map(l=>`<li class="log-item ${l.type}"><span class="log-time">${l.time}</span><span class="log-msg">${l.msg}</span></li>`).join('');
+  }
+
+  // Performance panel
+  document.getElementById('ppTotal').textContent=t;
+  document.getElementById('ppWinRate').textContent=wrPct;
+  document.getElementById('ppWL').textContent=`${w}W / ${perf.losses||0}L`;
+  const gross=perf.gross_pnl||0;
+  const brok=perf.brokerage_paid||0;
+  const gEl=document.getElementById('ppGross');
+  gEl.textContent=fmtP(gross); gEl.className='perf-val '+(gross>=0?'c-green':'c-red');
+  document.getElementById('ppBrok').textContent=fmtP(brok);
+  const netEl=document.getElementById('ppNet');
+  const net=perf.net_pnl||0;
+  netEl.textContent=fmtP(net); netEl.className='perf-val '+(net>=0?'c-green':'c-red');
+  document.getElementById('ppBest').textContent=fmtP(perf.best_trade||0);
+  document.getElementById('ppWorst').textContent=fmtP(perf.worst_trade||0);
+  const retEl2=document.getElementById('ppReturn');
+  retEl2.textContent=(ret>=0?'+':'')+ret.toFixed(2)+'%';
+  retEl2.className='perf-val '+(ret>=0?'c-green':'c-red');
+
+  // Sync config form
+  const cfg=p.config||{};
+  if(cfg.starting_capital) document.getElementById('pCfgCapital').value=cfg.starting_capital;
+  if(cfg.mode) document.getElementById('pCfgMode').value=cfg.mode;
+  if(cfg.take_profit_pct) document.getElementById('pCfgTP').value=cfg.take_profit_pct;
+  if(cfg.stop_loss_pct) document.getElementById('pCfgSL').value=cfg.stop_loss_pct;
+  if(cfg.risk_per_trade_pct) document.getElementById('pCfgRisk').value=cfg.risk_per_trade_pct;
+  if(cfg.max_daily_loss) document.getElementById('pCfgLoss').value=cfg.max_daily_loss;
+  if(cfg.rsi_oversold) document.getElementById('pCfgRsi').value=cfg.rsi_oversold;
+  if(cfg.max_trades_per_day) document.getElementById('pCfgTrades').value=cfg.max_trades_per_day;
+
+  // Strike tracker
+  const strikes=p.strike_count||{};
+  const stEl=document.getElementById('paperStrikesPanel');
+  const sItems=Object.entries(strikes).filter(([_,v])=>v>0);
+  if(!sItems.length){stEl.innerHTML=`<div class="empty">No strikes — all symbols clear</div>`;}
+  else{
+    stEl.innerHTML=`<div style="display:flex;gap:10px;flex-wrap:wrap;padding:4px 0">
+      ${sItems.map(([sym,n])=>`<span class="strike-badge" style="font-size:.74rem;padding:5px 12px">⚡${sym}: ${n}/2 strikes${n>=2?' — BANNED':''}</span>`).join('')}
+    </div>`;
+  }
+}
+
+function clearPaperLog(){document.getElementById('paperLogList').innerHTML=`<li class="log-item info"><span class="log-time">--:--:--</span><span class="log-msg">Cleared</span></li>`;}
+
+// ─── Compare Render ───────────────────────────────────────────────────────────
+function renderCompare(){
+  const ls=liveState; const ps=paperState;
+  // Live
+  const lpnl=ls.daily_pnl||0;
+  const lEl=document.getElementById('compLivePnl');
+  lEl.textContent=(lpnl>=0?'+':'')+fmtP(lpnl);
+  lEl.className='compare-pnl '+(lpnl>=0?'c-green':'c-red');
+  document.getElementById('compLiveDetail').textContent=`${ls.trade_count||0} trades · ${ls.open_positions?.length||0} open`;
+  const lp=ls.performance||{};
+  const lt=lp.total_trades||0, lw=lp.wins||0;
+  document.getElementById('compLiveWR').textContent=lt>0?(lw/lt*100).toFixed(1)+'%':'—';
+  const lnet=(lp.gross_pnl||0)-(lp.brokerage_paid||0);
+  const lnEl=document.getElementById('compLiveNet');
+  lnEl.textContent=fmtP(lnet); lnEl.className='perf-val '+(lnet>=0?'c-green':'c-red');
+  document.getElementById('compLiveBest').textContent=fmtP(lp.best_trade||0);
+  document.getElementById('compLiveWorst').textContent=fmtP(lp.worst_trade||0);
+  // Paper
+  const ppnl=ps.daily_pnl||0;
+  const pEl=document.getElementById('compPaperPnl');
+  pEl.textContent=(ppnl>=0?'+':'')+fmtP(ppnl);
+  pEl.style.color=ppnl>=0?'var(--paper)':'var(--red)';
+  document.getElementById('compPaperDetail').textContent=`${ps.trade_count||0} trades · ${ps.open_positions?.length||0} open`;
+  const pp=ps.performance||{};
+  const pt=pp.total_trades||0, pw=pp.wins||0;
+  document.getElementById('compPaperWR').textContent=pt>0?(pw/pt*100).toFixed(1)+'%':'—';
+  const pnet=pp.net_pnl||0;
+  const pnEl=document.getElementById('compPaperNet');
+  pnEl.textContent=fmtP(pnet); pnEl.className='perf-val '+(pnet>=0?'c-green':'c-red');
+  document.getElementById('compPaperBest').textContent=fmtP(pp.best_trade||0);
+  document.getElementById('compPaperWorst').textContent=fmtP(pp.worst_trade||0);
+
+  // Signal alignment table
+  const wl=ls.watchlist||[];
+  const ind=ls.indicators||{};
+  const livePosSyms=new Set((ls.open_positions||[]).map(p=>p.sym));
+  const paperPosSyms=new Set((ps.open_positions||[]).map(p=>p.sym));
+  const tb=document.getElementById('compareAlignTbody');
+  if(!wl.length){tb.innerHTML=`<tr><td colspan="8" class="empty">No watchlist data</td></tr>`;return;}
+  tb.innerHTML=wl.map(w=>{
+    const i=ind[w.sym]||{};
+    const biasCls=w.bias?.includes('BULL')?'pg':w.bias?.includes('BEAR')?'pr':'py';
+    const inLive=livePosSyms.has(w.sym);
+    const inPaper=paperPosSyms.has(w.sym);
+    const sync=(inLive===inPaper)?`<span class="badge bb">✓ Sync</span>`:`<span class="badge by">≠ Diff</span>`;
+    const livePos=inLive?`<span class="badge bb">OPEN</span>`:`<span style="color:var(--muted);font-size:.68rem">—</span>`;
+    const paperPos=inPaper?`<span class="badge bp">OPEN</span>`:`<span style="color:var(--muted);font-size:.68rem">—</span>`;
+    return `<tr>
+      <td><b>${w.sym}</b></td>
+      <td class="mono">${fmtP(w.ltp)}</td>
+      <td class="mono">${fmtP(w.vwap)}</td>
+      <td class="${(w.rsi||50)>70?'pr':(w.rsi||50)<35?'pg':'py'} mono">${(w.rsi||0).toFixed(1)}</td>
+      <td class="${biasCls}">${w.bias||'—'}</td>
+      <td>${livePos}</td>
+      <td>${paperPos}</td>
+      <td>${sync}</td>
+    </tr>`;
+  }).join('');
+
+  // Strategy Insights
+  const insEl=document.getElementById('strategyInsights');
+  if(!pt&&!lt){insEl.innerHTML=`<div class="empty">Enable paper trading and run some trades to see insights</div>`;return;}
+  const lwr=lt>0?(lw/lt*100).toFixed(1):0;
+  const pwr=pt>0?(pw/pt*100).toFixed(1):0;
+  const diff=((pwr-lwr)||0).toFixed(1);
+  const netDiff=(pnet-lnet).toFixed(2);
+  insEl.innerHTML=`
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+      <div class="perf-item">
+        <div class="perf-lbl">Win Rate Gap</div>
+        <div class="perf-val ${diff>=0?'c-green':'c-red'}">${diff>=0?'+':''}${diff}%</div>
+        <div style="font-size:.65rem;color:var(--muted2);margin-top:4px">Paper vs Live</div>
+      </div>
+      <div class="perf-item">
+        <div class="perf-lbl">Net P&L Gap</div>
+        <div class="perf-val ${netDiff>=0?'c-green':'c-red'}">${fmtP(netDiff)}</div>
+        <div style="font-size:.65rem;color:var(--muted2);margin-top:4px">Paper minus Live</div>
+      </div>
+      <div class="perf-item">
+        <div class="perf-lbl">Paper Trades</div>
+        <div class="perf-val c-paper">${pt}</div>
+        <div style="font-size:.65rem;color:var(--muted2);margin-top:4px">vs ${lt} live</div>
+      </div>
+      <div class="perf-item">
+        <div class="perf-lbl">Slippage (est)</div>
+        <div class="perf-val c-yellow">N/A</div>
+        <div style="font-size:.65rem;color:var(--muted2);margin-top:4px">Paper fills at market</div>
+      </div>
+    </div>
+  `;
+}
+
+// ─── Trade History ────────────────────────────────────────────────────────────
+async function loadTrades(){
+  const r=await fetch('/api/trades');
+  const d=await r.json();
+  const b=document.getElementById('tradeTbody');
+  const t=d.trades||[];
+  if(!t.length){b.innerHTML=`<tr><td colspan="9" class="empty">No trades</td></tr>`;return;}
+  b.innerHTML=t.map(t=>{
+    const badge=t.side==='BUY'?`<span class="badge bb">BUY</span>`:`<span class="badge bs">SELL</span>`;
+    const time=t.timestamp?t.timestamp.slice(11,19):'—';
+    const biasCls=(t.market_bias||'').includes('BULL')?'pg':(t.market_bias||'').includes('BEAR')?'pr':'py';
+    return `<tr><td class="mono" style="font-size:.67rem">${time}</td><td><b>${t.symbol}</b></td><td>${badge}</td><td class="mono">${t.qty}</td><td class="mono">${fmtP(t.price||0)}</td><td class="mono pr">${fmtP(t.sl||0)}</td><td class="mono pg">${fmtP(t.tp||0)}</td><td class="${biasCls}" style="font-size:.65rem">${t.market_bias||'—'}</td><td class="mono" style="font-size:.63rem;color:var(--muted2)">${t.order_id}</td></tr>`;
+  }).join('');
+}
+
+async function loadPaperTrades(){
+  const r=await fetch('/api/paper/trades');
+  const d=await r.json();
+  const b=document.getElementById('paperTradeTbody');
+  const t=d.trades||[];
+  if(!t.length){b.innerHTML=`<tr><td colspan="9" class="empty">No paper trades yet</td></tr>`;return;}
+  b.innerHTML=t.map(t=>{
+    const badge=t.side==='BUY'?`<span class="badge bp">BUY</span>`:`<span class="badge bs">SELL</span>`;
+    const time=t.timestamp?t.timestamp.slice(11,19):'—';
+    const biasCls=(t.market_bias||'').includes('BULL')?'pp':'py';
+    return `<tr><td class="mono" style="font-size:.67rem">${time}</td><td><b>${t.symbol}</b></td><td>${badge}</td><td class="mono">${t.qty}</td><td class="mono">${fmtP(t.price||0)}</td><td class="mono pr">${fmtP(t.sl||0)}</td><td class="mono pg">${fmtP(t.tp||0)}</td><td class="${biasCls}" style="font-size:.65rem">${t.market_bias||'—'}</td><td class="mono" style="font-size:.63rem;color:var(--muted2)">${t.order_id}</td></tr>`;
+  }).join('');
+}
+
+async function loadPaperState(){
+  await pollPaper();
+}
+
+// ─── Performance ──────────────────────────────────────────────────────────────
+async function loadPerf(){
+  const r=await fetch('/api/performance');
+  const d=await r.json();
+  document.getElementById('pTotal').textContent=d.total_trades||0;
+  document.getElementById('pWinRate').textContent=`${d.win_rate||0}%`;
+  document.getElementById('pWL').textContent=`${d.wins||0}W / ${d.losses||0}L`;
+  document.getElementById('pGross').textContent=fmtP(d.gross_pnl||0);
+  document.getElementById('pBrok').textContent=fmtP(d.brokerage_paid||0);
+  const net=d.net_pnl||0;
+  const el=document.getElementById('pNet');
+  el.textContent=fmtP(net); el.className='perf-val '+(net>=0?'c-green':'c-red');
+  document.getElementById('pBest').textContent=fmtP(d.best_trade||0);
+  document.getElementById('pWorst').textContent=fmtP(d.worst_trade||0);
+  document.getElementById('pAvgW').textContent=fmtP(d.avg_win||0);
+}
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+function syncConfig(cfg,risk){
+  if(!cfg) return;
+  document.getElementById('cfgMode').value=cfg.mode||'hybrid';
+  document.getElementById('cfgTP').value=cfg.take_profit_pct??1.5;
+  document.getElementById('cfgSL').value=cfg.stop_loss_pct??0.35;
+  document.getElementById('cfgRisk').value=cfg.risk_per_trade_pct??0.5;
+  document.getElementById('cfgVwap').value=((cfg.vwap_entry_buffer??0.0015)*100).toFixed(2);
+  document.getElementById('cfgRsi').value=cfg.rsi_oversold??45;
+  document.getElementById('cfgLoss').value=risk?.max_daily_loss??3000;
+  document.getElementById('cfgTrades').value=cfg.max_trades_per_day??6;
+}
+
+async function applyConfig(){
+  const payload={
+    mode:document.getElementById('cfgMode').value,
+    take_profit_pct:parseFloat(document.getElementById('cfgTP').value),
+    stop_loss_pct:parseFloat(document.getElementById('cfgSL').value),
+    risk_per_trade_pct:parseFloat(document.getElementById('cfgRisk').value),
+    vwap_entry_buffer:parseFloat(document.getElementById('cfgVwap').value)/100,
+    rsi_oversold:parseFloat(document.getElementById('cfgRsi').value),
+    max_daily_loss:parseFloat(document.getElementById('cfgLoss').value),
+    max_trades_per_day:parseInt(document.getElementById('cfgTrades').value),
+  };
+  const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json();
+  alert(d.ok?'Config applied!':('Error: '+d.msg));
+}
+
+function resetConfig(){
+  document.getElementById('cfgMode').value='hybrid';
+  document.getElementById('cfgTP').value=1.5;
+  document.getElementById('cfgSL').value=0.35;
+  document.getElementById('cfgRisk').value=0.5;
+  document.getElementById('cfgVwap').value=0.15;
+  document.getElementById('cfgRsi').value=45;
+  document.getElementById('cfgLoss').value=3000;
+  document.getElementById('cfgTrades').value=6;
+}
+
+// ─── Paper Controls ───────────────────────────────────────────────────────────
+async function enablePaper(){
+  const capital=parseFloat(document.getElementById('pCfgCapital').value)||200000;
+  const r=await fetch('/api/paper/enable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({starting_capital:capital})});
+  const d=await r.json();
+  if(d.ok) pollPaper();
+  else alert('Error: '+d.msg);
+}
+
+async function disablePaper(){
+  if(!confirm('Disable paper trading? All positions will be kept in state.')) return;
+  await fetch('/api/paper/disable',{method:'POST'});
+  pollPaper();
+}
+
+async function resetPaper(){
+  if(!confirm('Reset ALL paper trading state? This clears all trades and resets capital.')) return;
+  const capital=parseFloat(document.getElementById('pCfgCapital').value)||200000;
+  const r=await fetch('/api/paper/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({starting_capital:capital})});
+  const d=await r.json();
+  alert(d.msg);
+  pollPaper(); loadPaperTrades();
+}
+
+async function paperSquareOff(){
+  if(!confirm('Square off all paper positions now?')) return;
+  const r=await fetch('/api/paper/square_off',{method:'POST'});
+  const d=await r.json();
+  alert(d.msg);
+  pollPaper();
+}
+
+async function applyPaperConfig(){
+  const payload={
+    mode:document.getElementById('pCfgMode').value,
+    take_profit_pct:parseFloat(document.getElementById('pCfgTP').value),
+    stop_loss_pct:parseFloat(document.getElementById('pCfgSL').value),
+    risk_per_trade_pct:parseFloat(document.getElementById('pCfgRisk').value),
+    max_daily_loss:parseFloat(document.getElementById('pCfgLoss').value),
+    rsi_oversold:parseFloat(document.getElementById('pCfgRsi').value),
+    max_trades_per_day:parseInt(document.getElementById('pCfgTrades').value),
+    starting_capital:parseFloat(document.getElementById('pCfgCapital').value),
+  };
+  const r=await fetch('/api/paper/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json();
+  alert(d.ok?'Paper config applied!':'Error: '+d.msg);
+  pollPaper();
+}
+
+function resetPaperConfigForm(){
+  document.getElementById('pCfgCapital').value=200000;
+  document.getElementById('pCfgMode').value='hybrid';
+  document.getElementById('pCfgTP').value=1.5;
+  document.getElementById('pCfgSL').value=0.35;
+  document.getElementById('pCfgRisk').value=0.5;
+  document.getElementById('pCfgLoss').value=3000;
+  document.getElementById('pCfgRsi').value=45;
+  document.getElementById('pCfgTrades').value=6;
+}
+
+// ─── Live Bot Controls ────────────────────────────────────────────────────────
+async function botStart(){const r=await fetch('/api/start',{method:'POST'});const d=await r.json();if(!d.ok) alert(d.msg);}
+async function botStop(){await fetch('/api/stop',{method:'POST'});}
+async function squareOff(){if(!confirm('Square off ALL live positions now?')) return;const r=await fetch('/api/square_off',{method:'POST'});const d=await r.json();alert(d.msg);}
+async function resetHalt(){await fetch('/api/reset_halt',{method:'POST'});}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+setInterval(updateClock,1000);
+setInterval(poll,3000);
+setInterval(pollPaper,4000);
+setInterval(loadTrades,15000);
+setInterval(loadPerf,10000);
+setInterval(loadPaperTrades,12000);
+updateClock(); poll(); pollPaper(); loadTrades(); loadPerf(); loadPaperTrades();
+</script>
+</body>
+</html>
