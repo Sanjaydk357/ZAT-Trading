@@ -155,17 +155,46 @@ def index():
                            login_url=login_url)
 
 
-@app.route("/auth", methods=["POST"])
+@app.route("/auth", methods=["GET", "POST"])
 def auth():
-    token = request.form.get("request_token", "").strip()
-    if not token:
+    # GET — Zerodha redirects here with ?request_token=xxx&action=login&status=success
+    if request.method == "GET":
+        token  = request.args.get("request_token", "").strip()
+        action = request.args.get("action", "")
+        status = request.args.get("status", "")
+
+        log.info(f"[AUTH GET] action={action} status={status} token={token[:10] if token else 'NONE'}...")
+
+        if status != "success":
+            engine.add_log(f"Login failed — status: {status}", "alert")
+            return redirect("/?error=login_failed")
+
+        if not token:
+            engine.add_log("Login failed — no request_token received", "alert")
+            return redirect("/?error=no_token")
+
+        try:
+            engine.authenticate(token)
+            engine.add_log("Login successful via Zerodha redirect", "info")
+        except Exception as e:
+            log.error(f"[AUTH GET] {e}")
+            engine.add_log(f"Auth failed: {e}", "alert")
+            return redirect(f"/?error={str(e)}")
+
         return redirect("/")
-    try:
-        engine.authenticate(token)
-    except Exception as e:
-        log.error(f"[AUTH] {e}")
-        engine.add_log(f"Auth failed: {e}", "alert")
-    return redirect("/")
+
+    # POST — manual token paste from dashboard form
+    if request.method == "POST":
+        token = request.form.get("request_token", "").strip()
+        if not token:
+            return redirect("/")
+        try:
+            engine.authenticate(token)
+            engine.add_log("Login successful via manual token", "info")
+        except Exception as e:
+            log.error(f"[AUTH POST] {e}")
+            engine.add_log(f"Auth failed: {e}", "alert")
+        return redirect("/")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
