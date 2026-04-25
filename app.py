@@ -211,39 +211,39 @@ def api_state():
 
     # ── Watchlist rows ────────────────────────────────────────────────────────
     watchlist_rows = []
-active_wl = engine.get_active_watchlist()
-for item in active_wl:
-    sym  = item["symbol"]
-    ex   = item.get("exchange", "NSE")
-    ind  = s["indicator_cache"].get(sym, {})
-    ltp  = float(s["ltp_cache"].get(sym, 0.0))
-    vwap = float(ind.get("vwap", 0) or 0)
-    chg  = round(((ltp - vwap) / vwap * 100), 2) if vwap > 0 else 0.0
+    active_wl = engine.get_active_watchlist()
+    for item in active_wl:
+        sym  = item["symbol"]
+        ex   = item.get("exchange", "NSE")
+        ind  = s["indicator_cache"].get(sym, {})
+        ltp  = float(s["ltp_cache"].get(sym, 0.0))
+        vwap = float(ind.get("vwap", 0) or 0)
+        chg  = round(((ltp - vwap) / vwap * 100), 2) if vwap > 0 else 0.0
 
-    # Get score from dynamic watchlist
-    dyn_item = next(
-        (x for x in s.get("dynamic_watchlist", [])
-         if x["symbol"] == sym), {}
-    )
+        # Get score from dynamic watchlist
+        dyn_item = next(
+            (x for x in s.get("dynamic_watchlist", [])
+             if x["symbol"] == sym), {}
+        )
 
-    watchlist_rows.append({
-        "sym":     sym,
-        "ex":      ex,
-        "ltp":     round(ltp, 2),
-        "vwap":    round(vwap, 2),
-        "ema9":    round(float(ind.get("ema9",  0) or 0), 2),
-        "ema20":   round(float(ind.get("ema20", 0) or 0), 2),
-        "rsi":     round(float(ind.get("rsi",  50) or 50), 2),
-        "atr":     round(float(ind.get("atr",   0) or 0), 2),
-        "bias":    str(ind.get("bias", "NEUTRAL")),
-        "chg":     chg,
-        "volume":  int(dyn_item.get("volume", 0)),
-        "score":   round(float(dyn_item.get("score", 0)), 2),
-        "day_chg": round(float(dyn_item.get("day_chg", 0)), 2),
-    })
+        watchlist_rows.append({
+            "sym":     sym,
+            "ex":      ex,
+            "ltp":     round(ltp, 2),
+            "vwap":    round(vwap, 2),
+            "ema9":    round(float(ind.get("ema9",  0) or 0), 2),
+            "ema20":   round(float(ind.get("ema20", 0) or 0), 2),
+            "rsi":     round(float(ind.get("rsi",  50) or 50), 2),
+            "atr":     round(float(ind.get("atr",   0) or 0), 2),
+            "bias":    str(ind.get("bias", "NEUTRAL")),
+            "chg":     chg,
+            "volume":  int(dyn_item.get("volume", 0)),
+            "score":   round(float(dyn_item.get("score", 0)), 2),
+            "day_chg": round(float(dyn_item.get("day_chg", 0)), 2),
+        })
 
-# Sort by score (best first)
-watchlist_rows.sort(key=lambda x: x.get("score", 0), reverse=True)
+    # Sort by score (best first)
+    watchlist_rows.sort(key=lambda x: x.get("score", 0), reverse=True)
 
 
     # ── Open positions ────────────────────────────────────────────────────────
