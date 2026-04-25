@@ -2,7 +2,7 @@
 Robust VWAP-EMA Hybrid Trading Engine
 Dynamic watchlist — auto-selects best stocks meeting conditions
 """
-
+import pytz
 import os
 import time
 import json
@@ -15,6 +15,9 @@ from kiteconnect import KiteConnect
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+
+# IST timezone — Render runs in UTC, but NSE uses IST
+IST = pytz.timezone("Asia/Kolkata")
 
 API_KEY    = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
@@ -36,6 +39,72 @@ from indicators import (
     get_market_bias, calculate_position_size, calculate_trailing_sl
 )
 from risk_manager import RiskManager
+
+
+def get_ist_now():
+    """Get current time in IST regardless of server timezone."""
+    return datetime.now(IST)
+
+# REPLACE the old is_market_open function:
+def is_market_open() -> bool:
+    """Check if NSE market is open (9:15 AM - 3:15 PM IST)."""
+    now = get_ist_now().time()
+    # Also check weekday (0=Mon, 4=Fri, 5=Sat, 6=Sun)
+    weekday = get_ist_now().weekday()
+    if weekday >= 5:  # Saturday or Sunday
+        return False
+    return CONFIG["market_open"] <= now <= CONFIG["market_close"]
+
+# REPLACE all datetime.now() calls to use IST:
+def add_log(msg: str, log_type: str = "info"):
+    entry = {
+        "time": get_ist_now().strftime("%H:%M:%S"),
+        "msg":  msg,
+        "type": log_type,
+    }
+    with _state_lock:
+        state["activity_log"].append(entry)
+        if len(state["activity_log"]) > 300:
+            state["activity_log"] = state["activity_log"][-300:]
+    log.info(f"[{log_type.upper()}] {msg}")
+
+# REPLACE _strategy_tick's date/time handling:
+def _strategy_tick():
+    if not is_market_open() or not _auth:
+        return
+
+    now   = get_ist_now().time()
+    today = get_ist_now().strftime("%Y-%m-%d")
+
+    if state["session_date"] != today:
+        risk_mgr.daily_reset()
+        state["session_date"] = today
+        add_log("New session — daily counters reset", "info")
+
+    if now < dtime(9, 30):
+        add_log("No-fly zone (9:15–9:30) — observing", "info")
+        return
+
+    try:
+        _fetch_profile()
+    except Exception:
+        pass
+
+    risk_mgr.check_mtm(state["ltp_cache"])
+    update_market_regime()
+
+    mode = CONFIG["strategy"]["mode"]
+    add_log(
+        f"TICK | Mode:{mode} | Bias:{state['market_bias']} | "
+        f"PnL:{fmt_price(state['daily_pnl'])} | "
+        f"Trades:{state['trade_count']} | "
+        f"WL:{len(get_active_watchlist())} stocks",
+        "info"
+    )
+
+    if mode in ("hybrid", "margin"):
+        run_hybrid_strategy()
+
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 CONFIG = {
