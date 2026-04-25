@@ -378,6 +378,33 @@ def api_paper_reset():
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)})
 
+@app.route("/api/search_symbol")
+def search_symbol():
+    """
+    Search for exact symbol name on NSE.
+    Usage: /api/search_symbol?q=HDFC
+    """
+    query    = request.args.get("q", "").upper()
+    exchange = request.args.get("ex", "NSE")
+    if not engine.is_authenticated():
+        return jsonify({"error": "Not authenticated"})
+    try:
+        instruments = engine.kite.instruments(exchange)
+        matches = [
+            {
+                "symbol":  i["tradingsymbol"],
+                "name":    i["name"],
+                "token":   i["instrument_token"],
+                "type":    i["instrument_type"],
+            }
+            for i in instruments
+            if query in i["tradingsymbol"] or query in i["name"].upper()
+        ][:20]  # limit to 20 results
+        return jsonify({"matches": matches, "total": len(matches)})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+        
+
 
 @app.route("/api/paper/config", methods=["POST"])
 def api_paper_config():
