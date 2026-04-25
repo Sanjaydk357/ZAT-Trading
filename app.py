@@ -149,10 +149,12 @@ engine.authenticate    = _authenticate_render
 @app.route("/")
 def index():
     login_needed = not engine.is_authenticated()
-    login_url    = engine.kite.login_url() if login_needed else ""
+    # Generate login URL — Zerodha will redirect to /auth with GET
+    login_url = engine.kite.login_url() if login_needed else ""
     return render_template("index.html",
                            login_needed=login_needed,
                            login_url=login_url)
+
 
 
 @app.route("/auth", methods=["GET", "POST"])
