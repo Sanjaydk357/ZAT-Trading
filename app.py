@@ -681,29 +681,39 @@ def api_logout():
 
 def _data_refresh_loop():
     """
-    Refresh LTP + indicators every 15 seconds using BULK quote API.
-    One API call fetches ALL symbols at once.
+    Refresh LTP + indicators every 15 seconds.
+    Uses bulk quote API — one call for all symbols.
     """
     import time as _time
+    import pytz
+    IST = pytz.timezone("Asia/Kolkata")
+
     while True:
         try:
-            if engine.is_authenticated() and engine.is_market_open():
+            ist_now   = datetime.now(IST)
+            ist_time  = ist_now.time()
+            weekday   = ist_now.weekday()
+            mkt_open  = weekday < 5 and dtime(9, 15) <= ist_time <= dtime(15, 15)
+            is_auth   = engine.is_authenticated()
 
+            if is_auth and mkt_open:
                 # Get active watchlist
                 watchlist = engine.get_active_watchlist()
                 symbols   = [i["symbol"] for i in watchlist]
-
-                # Add index
                 symbols.append(engine.CONFIG["index"]["symbol"])
 
-                # ONE bulk API call for all symbols
+                # Remove duplicates
+                symbols = list(set(symbols))
+
+                # ONE bulk API call
                 try:
-                    engine.fetch_quotes_bulk(symbols, "NSE")
-                    log.debug(f"[REFRESH] Fetched {len(symbols)} quotes")
+                    quotes = engine.fetch_quotes_bulk(symbols, "NSE")
+                    log.info(f"[REFRESH] Fetched {len(quotes)} quotes "
+                             f"at {ist_now.strftime('%H:%M:%S')} IST")
                 except Exception as e:
                     log.error(f"[REFRESH QUOTE] {e}")
 
-                # Compute indicators for each symbol
+                # Compute indicators
                 for item in watchlist:
                     try:
                         engine.compute_indicators(
@@ -713,20 +723,22 @@ def _data_refresh_loop():
                     except Exception as ex:
                         log.debug(f"[REFRESH IND] {item['symbol']}: {ex}")
 
-                # Update index indicators + market bias
+                # Market bias
                 try:
-                    idx = engine.CONFIG["index"]
-                    engine.compute_indicators(
-                        idx["symbol"], idx["exchange"])
                     engine.update_market_regime()
                 except Exception:
                     pass
 
-                # MTM update
+                # MTM
                 try:
                     engine.risk_mgr.check_mtm(engine.state["ltp_cache"])
                 except Exception:
                     pass
+
+            elif is_auth and not mkt_open:
+                log.debug(f"[REFRESH] Market closed. "
+                          f"IST: {ist_now.strftime('%H:%M:%S')} "
+                          f"Weekday: {weekday}")
 
         except Exception as e:
             log.error(f"[DATA REFRESH] {e}")
