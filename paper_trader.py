@@ -245,111 +245,118 @@ def run_paper_tick(watchlist: list, indicator_cache: dict,
 
 def _paper_hybrid(watchlist, indicator_cache, ltp_cache, cfg):
     bias = paper_state["market_bias"]
+
+    # ── Check exits for ALL open positions regardless of bias ─────────────────
+    for symbol in list(paper_state["open_positions"].keys()):
+        ind   = indicator_cache.get(symbol, {})
+        ltp   = float(ltp_cache.get(symbol, 0))
+        if ltp <= 0:
+            continue
+        ema9  = float(ind.get("ema9", 0))
+        rsi   = float(ind.get("rsi", 50))
+        atr   = float(ind.get("atr", 0))
+        pos   = paper_state["open_positions"][symbol]
+        entry = pos["entry_price"]
+        qty   = pos["qty"]
+        pnl_pct = (ltp - entry) / entry * 100
+
+        new_trail = calculate_trailing_sl(entry, ltp, atr, "BUY")
+        if new_trail > pos["trail_sl"]:
+            pos["trail_sl"] = new_trail
+
+        should_exit = False
+        exit_reason = ""
+
+        if pnl_pct >= cfg["take_profit_pct"]:
+            should_exit = True
+            exit_reason = f"TAKE PROFIT +{pnl_pct:.2f}%"
+        elif ltp <= pos["trail_sl"]:
+            should_exit = True
+            exit_reason = f"TRAIL SL @ ₹{pos['trail_sl']:,.2f}"
+        elif pnl_pct <= -cfg["stop_loss_pct"]:
+            should_exit = True
+            exit_reason = f"STOP LOSS {pnl_pct:.2f}%"
+        elif rsi >= 78:
+            should_exit = True
+            exit_reason = f"RSI overbought ({rsi:.1f})"
+        elif ltp < ema9 and pnl_pct > 0:
+            should_exit = True
+            exit_reason = "EMA9 breakdown"
+
+        if should_exit:
+            _paper_exit(symbol, qty, ltp, entry, exit_reason)
+
+    # ── Only enter new positions in BULL bias ─────────────────────────────────
     if bias not in ("BULL", "STRONG_BULL"):
         return
 
     for item in sorted(watchlist, key=lambda x: x.get("priority", 9)):
         symbol = item["symbol"]
-        ind    = indicator_cache.get(symbol, {})
+        if symbol in paper_state["open_positions"]:
+            continue  # Already handled exit above
+
+        ind  = indicator_cache.get(symbol, {})
         if not ind:
             continue
 
-        ltp   = float(ltp_cache.get(symbol, 0))
+        ltp  = float(ltp_cache.get(symbol, 0))
         if ltp <= 0:
             continue
 
-        vwap  = float(ind.get("vwap", 0))
-        ema9  = float(ind.get("ema9", 0))
-        rsi   = float(ind.get("rsi", 50))
-        atr   = float(ind.get("atr", 0))
-        macd  = ind.get("macd", {})
-        boll  = ind.get("bollinger", {})
+        vwap = float(ind.get("vwap", 0))
+        rsi  = float(ind.get("rsi", 50))
+        atr  = float(ind.get("atr", 0))
+        boll = ind.get("bollinger", {})
 
-        if symbol not in paper_state["open_positions"]:
-            # ── ENTRY ────────────────────────────────────────────────────────
-            ok, reason = can_paper_trade(symbol)
-            if not ok:
-                continue
+        ok, reason = can_paper_trade(symbol)
+        if not ok:
+            continue
 
-            if vwap <= 0:
-                continue
+        if vwap <= 0:
+            continue
 
-            vwap_diff = abs(ltp - vwap) / vwap
-            near_vwap = vwap_diff <= cfg["vwap_entry_buffer"]
-            at_vwap   = ltp <= vwap * 1.001
-            rsi_ok    = rsi < cfg["rsi_overbought"]
-            boll_ok   = ltp >= float(boll.get("lower", 0))
+        vwap_diff = abs(ltp - vwap) / vwap
+        near_vwap = vwap_diff <= cfg["vwap_entry_buffer"]
+        at_vwap   = ltp <= vwap * 1.001
+        rsi_ok    = rsi < cfg["rsi_overbought"]
+        boll_ok   = ltp >= float(boll.get("lower", 0))
 
-            if near_vwap and at_vwap and rsi_ok and boll_ok:
-                if cfg["use_dynamic_sizing"]:
-                    qty = calculate_position_size(
-                        capital     = cfg.get("current_capital", 200000),
-                        risk_pct    = cfg["risk_per_trade_pct"],
-                        entry_price = ltp,
-                        sl_pct      = cfg["stop_loss_pct"],
-                        min_qty     = item.get("qty", 1),
-                    )
-                else:
-                    qty = item.get("qty", 1)
-
-                sl_price = round(ltp * (1 - cfg["stop_loss_pct"] / 100), 2)
-                tp_price = round(ltp * (1 + cfg["take_profit_pct"] / 100), 2)
-
-                add_paper_log(
-                    f"ENTRY: {symbol} LTP:{fmt(ltp)} VWAP:{fmt(vwap)} "
-                    f"RSI:{rsi:.1f} Qty:{qty}", "buy"
+        if near_vwap and at_vwap and rsi_ok and boll_ok:
+            if cfg["use_dynamic_sizing"]:
+                qty = calculate_position_size(
+                    capital     = cfg.get("current_capital", 200000),
+                    risk_pct    = cfg["risk_per_trade_pct"],
+                    entry_price = ltp,
+                    sl_pct      = cfg["stop_loss_pct"],
+                    min_qty     = item.get("qty", 1),
                 )
-                oid = paper_place_order(symbol, "BUY", qty, ltp, sl_price, tp_price)
-                paper_state["open_positions"][symbol] = {
-                    "entry_price": ltp,
-                    "qty":         qty,
-                    "side":        "BUY",
-                    "order_id":    oid,
-                    "sl_price":    sl_price,
-                    "tp_price":    tp_price,
-                    "trail_sl":    sl_price,
-                    "entry_time":  datetime.now().isoformat(),
-                    "entry_vwap":  vwap,
-                    "entry_rsi":   rsi,
-                    "atr":         atr,
-                }
-                paper_state["trade_count"] += 1
-                paper_state["performance"]["total_trades"] += 1
+            else:
+                qty = item.get("qty", 1)
 
-        else:
-            # ── EXIT ─────────────────────────────────────────────────────────
-            pos     = paper_state["open_positions"][symbol]
-            entry   = pos["entry_price"]
-            qty     = pos["qty"]
-            atr     = pos.get("atr", 0)
-            pnl_pct = (ltp - entry) / entry * 100
+            sl_price = round(ltp * (1 - cfg["stop_loss_pct"] / 100), 2)
+            tp_price = round(ltp * (1 + cfg["take_profit_pct"] / 100), 2)
 
-            # Update trailing SL
-            new_trail = calculate_trailing_sl(entry, ltp, atr, "BUY")
-            if new_trail > pos["trail_sl"]:
-                pos["trail_sl"] = new_trail
-
-            should_exit = False
-            exit_reason = ""
-
-            if pnl_pct >= cfg["take_profit_pct"]:
-                should_exit = True
-                exit_reason = f"TAKE PROFIT +{pnl_pct:.2f}%"
-            elif ltp <= pos["trail_sl"]:
-                should_exit = True
-                exit_reason = f"TRAIL SL @ {fmt(pos['trail_sl'])}"
-            elif pnl_pct <= -cfg["stop_loss_pct"]:
-                should_exit = True
-                exit_reason = f"STOP LOSS {pnl_pct:.2f}%"
-            elif rsi >= 78:
-                should_exit = True
-                exit_reason = f"RSI overbought ({rsi:.1f})"
-            elif ltp < ema9 and pnl_pct > 0:
-                should_exit = True
-                exit_reason = f"EMA9 breakdown"
-
-            if should_exit:
-                _paper_exit(symbol, qty, ltp, entry, exit_reason)
+            add_paper_log(
+                f"ENTRY {symbol} LTP:₹{ltp:,.2f} "
+                f"VWAP:₹{vwap:,.2f} RSI:{rsi:.1f} Qty:{qty}", "buy"
+            )
+            oid = paper_place_order(symbol, "BUY", qty,
+                                    ltp, sl_price, tp_price)
+            paper_state["open_positions"][symbol] = {
+                "entry_price": ltp,
+                "qty":         qty,
+                "side":        "BUY",
+                "order_id":    oid,
+                "sl_price":    sl_price,
+                "tp_price":    tp_price,
+                "trail_sl":    sl_price,
+                "entry_time":  datetime.now().isoformat(),
+                "entry_vwap":  vwap,
+                "entry_rsi":   rsi,
+                "atr":         atr,
+            }
+            paper_state["trade_count"]               += 1
+            paper_state["performance"]["total_trades"] += 1
 
 def _paper_exit(symbol: str, qty: int, ltp: float,
                 entry: float, reason: str = ""):
