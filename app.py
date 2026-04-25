@@ -1,13 +1,14 @@
 """
 app.py — Flask Backend + ZeroBot Pro Entry Point
-Render-compatible version: no file system dependency
+Render-compatible: IST timezone, in-memory storage, bulk quotes
 """
 
 import os
 import json
 import logging
 import threading
-from datetime import datetime
+import pytz
+from datetime import datetime, time as dtime
 from flask import Flask, render_template, request, jsonify, redirect
 
 import paper_trader as paper
@@ -17,25 +18,41 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
-        logging.StreamHandler(),  # Render shows stdout in logs
+        logging.StreamHandler(),
     ]
 )
 log = logging.getLogger(__name__)
+
+# ─── IST Timezone ─────────────────────────────────────────────────────────────
+IST = pytz.timezone("Asia/Kolkata")
+
+def ist_now() -> datetime:
+    return datetime.now(IST)
+
+def ist_time_str() -> str:
+    return ist_now().strftime("%H:%M:%S")
+
+def is_market_hours() -> bool:
+    """Check market hours using IST regardless of server timezone."""
+    now     = ist_now()
+    weekday = now.weekday()          # 0=Mon … 4=Fri, 5=Sat, 6=Sun
+    t       = now.time()
+    if weekday >= 5:
+        return False
+    return dtime(9, 15) <= t <= dtime(15, 15)
 
 # ─── Flask App ────────────────────────────────────────────────────────────────
 app = Flask(__name__, template_folder="templates")
 
 import trader_engine as engine
 
-# ─── In-memory trade log (replaces trades.json on Render) ────────────────────
+# ─── In-Memory Trade Log ──────────────────────────────────────────────────────
 _trade_log_memory = []
 _trade_log_lock   = threading.Lock()
 
 def save_trade_memory(trade: dict):
-    """Save trade to in-memory log (Render has no persistent disk)."""
     with _trade_log_lock:
         _trade_log_memory.append(trade)
-        # Keep last 500 trades in memory
         if len(_trade_log_memory) > 500:
             _trade_log_memory.pop(0)
 
@@ -43,10 +60,10 @@ def get_trades_memory() -> list:
     with _trade_log_lock:
         return list(reversed(_trade_log_memory[-100:]))
 
-# Monkey-patch engine's _log_trade to use memory instead of file
+# Patch engine's _log_trade → use memory instead of file
 def _log_trade_memory(symbol, side, qty, price, order_id, sl=0, tp=0):
     entry = {
-        "timestamp":   datetime.now().isoformat(),
+        "timestamp":   ist_now().isoformat(),
         "symbol":      symbol,
         "side":        side,
         "qty":         qty,
@@ -61,21 +78,15 @@ def _log_trade_memory(symbol, side, qty, price, order_id, sl=0, tp=0):
 engine._log_trade = _log_trade_memory
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  TOKEN STORAGE — uses env var on Render (no file system)
+#  TOKEN STORAGE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# In-memory token store (persists for the lifetime of the Render instance)
-_token_store = {
-    "token": None,
-    "date":  None,
-}
+_token_store = {"token": None, "date": None}
 
 def save_token(token: str):
-    """Save token in memory (Render) or file (local)."""
-    today = datetime.today().strftime("%Y-%m-%d")
+    today = ist_now().strftime("%Y-%m-%d")
     _token_store["token"] = token
     _token_store["date"]  = today
-    # Also try file (works locally, silently fails on Render)
     try:
         with open("access_token.json", "w") as f:
             json.dump({"token": token, "date": today}, f)
@@ -83,12 +94,9 @@ def save_token(token: str):
         pass
     log.info("[TOKEN] Saved in memory.")
 
-def load_token() -> tuple[str | None, str | None]:
-    """Load token from memory first, then file."""
-    # Check memory
+def load_token() -> tuple:
     if _token_store["token"]:
         return _token_store["token"], _token_store["date"]
-    # Try file (local dev)
     try:
         with open("access_token.json") as f:
             data = json.load(f)
@@ -97,7 +105,6 @@ def load_token() -> tuple[str | None, str | None]:
         return None, None
 
 def delete_token():
-    """Clear token from memory and file."""
     _token_store["token"] = None
     _token_store["date"]  = None
     try:
@@ -105,15 +112,14 @@ def delete_token():
     except Exception:
         pass
 
-# Override engine's token functions to use our memory store
+# ─── Render-Compatible Auth ───────────────────────────────────────────────────
+
 def _try_load_token_render():
-    """Render-compatible token loader."""
-    global_auth = engine._auth
     token, date = load_token()
     if not token:
         log.info("[AUTH] No saved token.")
         return
-    today = datetime.today().strftime("%Y-%m-%d")
+    today = ist_now().strftime("%Y-%m-%d")
     if date == today:
         try:
             engine.kite.set_access_token(token)
@@ -122,12 +128,13 @@ def _try_load_token_render():
             engine.add_log("Session restored from saved token", "info")
             log.info("[AUTH] Token restored.")
         except Exception as e:
-            log.error(f"[AUTH] Token restore failed: {e}")
+            log.error(f"[AUTH] Restore failed: {e}")
+            engine._auth = False
+            delete_token()
     else:
         log.info("[AUTH] Stale token — login required.")
 
 def _authenticate_render(request_token: str):
-    """Render-compatible authentication."""
     data  = engine.kite.generate_session(
         request_token, api_secret=engine.CONFIG["api_secret"])
     token = data["access_token"]
@@ -136,11 +143,11 @@ def _authenticate_render(request_token: str):
     save_token(token)
     engine._fetch_profile()
     engine.add_log("Login successful", "info")
-    log.info("[AUTH] Authenticated.")
+    log.info("[AUTH] Authenticated successfully.")
 
-# Patch engine functions
-engine.try_load_token  = _try_load_token_render
-engine.authenticate    = _authenticate_render
+# Patch engine auth functions
+engine.try_load_token = _try_load_token_render
+engine.authenticate   = _authenticate_render
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE ROUTES
@@ -149,54 +156,115 @@ engine.authenticate    = _authenticate_render
 @app.route("/")
 def index():
     login_needed = not engine.is_authenticated()
-    # Generate login URL — Zerodha will redirect to /auth with GET
-    login_url = engine.kite.login_url() if login_needed else ""
+    login_url    = engine.kite.login_url() if login_needed else ""
     return render_template("index.html",
                            login_needed=login_needed,
                            login_url=login_url)
 
 
-
 @app.route("/auth", methods=["GET", "POST"])
 def auth():
-    # GET — Zerodha redirects here with ?request_token=xxx&action=login&status=success
+    # ── GET — Zerodha redirects here after login ───────────────────────────
     if request.method == "GET":
         token  = request.args.get("request_token", "").strip()
         action = request.args.get("action", "")
         status = request.args.get("status", "")
 
-        log.info(f"[AUTH GET] action={action} status={status} token={token[:10] if token else 'NONE'}...")
+        log.info(f"[AUTH GET] action={action} status={status} "
+                 f"token={token[:10] if token else 'NONE'}...")
 
         if status != "success":
             engine.add_log(f"Login failed — status: {status}", "alert")
             return redirect("/?error=login_failed")
 
         if not token:
-            engine.add_log("Login failed — no request_token received", "alert")
+            engine.add_log("No request_token received", "alert")
             return redirect("/?error=no_token")
 
         try:
             engine.authenticate(token)
-            engine.add_log("Login successful via Zerodha redirect", "info")
+            engine.add_log("Login via Zerodha redirect successful", "info")
+
+            # Immediately build watchlist + fetch data after login
+            threading.Thread(
+                target=_post_login_init,
+                daemon=True, name="PostLoginInit"
+            ).start()
+
         except Exception as e:
             log.error(f"[AUTH GET] {e}")
             engine.add_log(f"Auth failed: {e}", "alert")
-            return redirect(f"/?error={str(e)}")
+            return redirect(f"/?error=auth_failed")
 
         return redirect("/")
 
-    # POST — manual token paste from dashboard form
+    # ── POST — Manual token paste ──────────────────────────────────────────
     if request.method == "POST":
         token = request.form.get("request_token", "").strip()
         if not token:
             return redirect("/")
         try:
             engine.authenticate(token)
-            engine.add_log("Login successful via manual token", "info")
+            engine.add_log("Login via manual token successful", "info")
+            threading.Thread(
+                target=_post_login_init,
+                daemon=True, name="PostLoginInit"
+            ).start()
         except Exception as e:
             log.error(f"[AUTH POST] {e}")
             engine.add_log(f"Auth failed: {e}", "alert")
         return redirect("/")
+
+
+def _post_login_init():
+    """
+    Runs in background immediately after login.
+    Builds watchlist and fetches initial data.
+    """
+    import time as _time
+    _time.sleep(1)  # Small delay to let auth settle
+
+    log.info("[INIT] Post-login initialisation starting...")
+
+    # Build dynamic watchlist
+    try:
+        engine.build_dynamic_watchlist()
+        log.info("[INIT] Dynamic watchlist built.")
+    except Exception as e:
+        log.error(f"[INIT] Watchlist build failed: {e}")
+
+    # Fetch initial quotes if market open
+    if is_market_hours():
+        try:
+            symbols = list({
+                i["symbol"]
+                for i in engine.get_active_watchlist()
+            })
+            symbols.append(engine.CONFIG["index"]["symbol"])
+            quotes = engine.fetch_quotes_bulk(symbols, "NSE")
+            log.info(f"[INIT] Fetched {len(quotes)} initial quotes.")
+        except Exception as e:
+            log.error(f"[INIT] Quote fetch failed: {e}")
+
+        # Compute indicators
+        for item in engine.get_active_watchlist():
+            try:
+                engine.compute_indicators(
+                    item["symbol"],
+                    item.get("exchange", "NSE")
+                )
+            except Exception as ex:
+                log.debug(f"[INIT IND] {item['symbol']}: {ex}")
+
+        # Market regime
+        try:
+            engine.update_market_regime()
+        except Exception as e:
+            log.error(f"[INIT] Market regime failed: {e}")
+    else:
+        log.info("[INIT] Market closed — skipping quote fetch.")
+
+    engine.add_log("Initialisation complete — data ready", "info")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -212,6 +280,7 @@ def api_state():
     # ── Watchlist rows ────────────────────────────────────────────────────────
     watchlist_rows = []
     active_wl = engine.get_active_watchlist()
+
     for item in active_wl:
         sym  = item["symbol"]
         ex   = item.get("exchange", "NSE")
@@ -220,12 +289,10 @@ def api_state():
         vwap = float(ind.get("vwap", 0) or 0)
         chg  = round(((ltp - vwap) / vwap * 100), 2) if vwap > 0 else 0.0
 
-        # Get score from dynamic watchlist
         dyn_item = next(
             (x for x in s.get("dynamic_watchlist", [])
              if x["symbol"] == sym), {}
         )
-
         watchlist_rows.append({
             "sym":     sym,
             "ex":      ex,
@@ -242,24 +309,17 @@ def api_state():
             "day_chg": round(float(dyn_item.get("day_chg", 0)), 2),
         })
 
-    # Sort by score (best first)
     watchlist_rows.sort(key=lambda x: x.get("score", 0), reverse=True)
-
 
     # ── Open positions ────────────────────────────────────────────────────────
     positions = []
     for sym, pos in s["open_positions"].items():
         if sym.startswith("ARB_"):
             positions.append({
-                "sym":   sym,
-                "type":  "ARB",
-                "qty":   int(pos.get("qty", 0)),
-                "entry": 0.0,
-                "ltp":   0.0,
-                "pnl":   0.0,
-                "side":  "ARB",
-                "sl":    0.0,
-                "tp":    0.0,
+                "sym": sym, "type": "ARB",
+                "qty": int(pos.get("qty", 0)),
+                "entry": 0.0, "ltp": 0.0, "pnl": 0.0,
+                "side": "ARB", "sl": 0.0, "tp": 0.0,
             })
         else:
             ltp   = float(s["ltp_cache"].get(sym, pos["entry_price"]))
@@ -273,8 +333,8 @@ def api_state():
                 "ltp":   round(ltp, 2),
                 "pnl":   round((ltp - entry) * qty, 2),
                 "side":  str(pos.get("side", "BUY")),
-                "sl":    round(float(
-                    pos.get("trail_sl", pos.get("sl_price", 0)) or 0), 2),
+                "sl":    round(float(pos.get(
+                    "trail_sl", pos.get("sl_price", 0)) or 0), 2),
                 "tp":    round(float(pos.get("tp_price", 0) or 0), 2),
             })
 
@@ -298,8 +358,8 @@ def api_state():
         "watchlist":      watchlist_rows,
         "indicators":     _safe_indicators(s["indicator_cache"]),
         "logs":           list(s["activity_log"])[-80:],
-        "strike_count":   {k: int(v) for k, v
-                          in s.get("strike_count", {}).items()},
+        "strike_count":   {k: int(v)
+                          for k, v in s.get("strike_count", {}).items()},
         "profile":        dict(s.get("profile", {})),
         "funds":          dict(s.get("funds", {})),
         "config": {
@@ -325,8 +385,8 @@ def api_state():
             "net_pnl":        round(gross - brok, 2),
             "best_trade":     round(float(perf.get("best_trade", 0)), 2),
             "worst_trade":    round(float(perf.get("worst_trade", 0)), 2),
-            "win_rate":  round(wins / total * 100, 1) if total > 0 else 0.0,
-            "avg_win":   round(gross / wins, 2) if wins > 0 else 0.0,
+            "win_rate":  round(wins/total*100, 1) if total > 0 else 0.0,
+            "avg_win":   round(gross/wins, 2) if wins > 0 else 0.0,
         },
     })
 
@@ -377,9 +437,10 @@ def api_start():
         return jsonify({"ok": False,
                         "msg": "Bot halted. Click Reset Halt first."})
     try:
-        t = threading.Thread(target=engine.start_bot,
-                             daemon=True, name="BotThread")
-        t.start()
+        threading.Thread(
+            target=engine.start_bot,
+            daemon=True, name="BotThread"
+        ).start()
         engine.add_log("Bot started from dashboard", "info")
         return jsonify({"ok": True, "msg": "Bot started."})
     except Exception as e:
@@ -446,7 +507,6 @@ def api_config():
 
 @app.route("/api/trades")
 def api_trades():
-    """Return trades from in-memory log."""
     return jsonify({"trades": get_trades_memory()})
 
 
@@ -466,8 +526,8 @@ def api_performance():
         "net_pnl":        round(gross - brok, 2),
         "best_trade":     round(float(perf.get("best_trade", 0)), 2),
         "worst_trade":    round(float(perf.get("worst_trade", 0)), 2),
-        "win_rate":  round(wins / total * 100, 1) if total > 0 else 0.0,
-        "avg_win":   round(gross / wins, 2) if wins > 0 else 0.0,
+        "win_rate":  round(wins/total*100, 1) if total > 0 else 0.0,
+        "avg_win":   round(gross/wins, 2) if wins > 0 else 0.0,
     })
 
 
@@ -548,49 +608,98 @@ def api_paper_trades():
     return jsonify({"trades": trades})
 
 
-@app.route("/api/paper/debug")
-def api_paper_debug():
-    """Check paper trading engine status."""
+# ═══════════════════════════════════════════════════════════════════════════════
+#  DEBUG ROUTES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/debug")
+def api_debug():
+    """Full system debug — check why data isn't showing."""
     ltp_cache = engine.state["ltp_cache"]
     ind_cache = engine.state["indicator_cache"]
+    utc_now   = datetime.utcnow()
+    ist       = ist_now()
 
-    # Check each condition
-    checks = {
-        "paper_enabled":      paper.paper_state["enabled"],
-        "paper_halted":       paper.paper_state["halted"],
-        "market_open":        engine.is_market_open(),
-        "authenticated":      engine.is_authenticated(),
-        "market_bias":        engine.state["market_bias"],
-        "bias_allows_entry":  engine.state["market_bias"] in (
-                                  "BULL", "STRONG_BULL"),
-        "ltp_cache_count":    len(ltp_cache),
-        "indicator_cache_count": len(ind_cache),
-        "open_positions":     len(paper.paper_state["open_positions"]),
-        "trade_count_today":  paper.paper_state["trade_count"],
-        "daily_pnl":          paper.paper_state["daily_pnl"],
-        "trade_history_count": len(
-                                  paper.paper_state["trade_history"]),
-        "paper_config":       paper.paper_state["config"],
-    }
+    ltp_filled = sum(1 for v in ltp_cache.values() if float(v) > 0)
+    ind_filled = sum(1 for v in ind_cache.values()
+                     if isinstance(v, dict) and float(v.get("ltp", 0)) > 0)
 
-    # Per-symbol entry check
+    return jsonify({
+        "time": {
+            "utc":      utc_now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "ist":      ist.strftime("%Y-%m-%d %H:%M:%S IST"),
+            "weekday":  ist.strftime("%A"),
+            "market_open_ist": "09:15 – 15:15",
+        },
+        "auth": {
+            "is_authenticated": engine.is_authenticated(),
+            "is_market_open":   engine.is_market_open(),
+            "is_market_hours":  is_market_hours(),
+            "bot_running":      engine.bot_running,
+        },
+        "data": {
+            "ltp_cache_total":      len(ltp_cache),
+            "ltp_cache_non_zero":   ltp_filled,
+            "ind_cache_total":      len(ind_cache),
+            "ind_cache_non_zero":   ind_filled,
+            "ohlcv_cache_total":    len(engine.state.get("ohlcv_cache", {})),
+            "token_cache_count":    len(engine._token_cache),
+            "ltp_sample": {
+                k: round(float(v), 2)
+                for k, v in list(ltp_cache.items())[:5]
+            },
+        },
+        "watchlist": {
+            "type":          "dynamic" if engine.state.get(
+                                 "dynamic_watchlist") else "static",
+            "total":         len(engine.get_active_watchlist()),
+            "dynamic_count": len(engine.state.get("dynamic_watchlist", [])),
+            "symbols": [
+                i["symbol"]
+                for i in engine.get_active_watchlist()[:10]
+            ],
+        },
+        "market": {
+            "bias":        engine.state["market_bias"],
+            "daily_pnl":   engine.state["daily_pnl"],
+            "trade_count": engine.state["trade_count"],
+            "open_pos":    len(engine.state["open_positions"]),
+        },
+        "paper": {
+            "enabled":       paper.paper_state["enabled"],
+            "halted":        paper.paper_state["halted"],
+            "trade_count":   paper.paper_state["trade_count"],
+            "open_pos":      len(paper.paper_state["open_positions"]),
+            "history_count": len(paper.paper_state["trade_history"]),
+        },
+        "profile": engine.state.get("profile", {}),
+        "funds":   engine.state.get("funds", {}),
+        "last_logs": engine.state["activity_log"][-5:],
+    })
+
+
+@app.route("/api/paper/debug")
+def api_paper_debug():
+    """Paper trading entry condition check per symbol."""
+    ltp_cache = engine.state["ltp_cache"]
+    ind_cache = engine.state["indicator_cache"]
+    cfg       = paper.paper_state["config"]
+
     symbol_checks = []
-    for item in engine.CONFIG["watchlist"]:
-        sym = item["symbol"]
-        ind = ind_cache.get(sym, {})
+    for item in engine.get_active_watchlist():
+        sym  = item["symbol"]
+        ind  = ind_cache.get(sym, {})
         ltp  = float(ltp_cache.get(sym, 0))
         vwap = float(ind.get("vwap", 0) or 0)
         rsi  = float(ind.get("rsi", 50) or 50)
         boll = ind.get("bollinger", {}) or {}
-        cfg  = paper.paper_state["config"]
 
         vwap_diff  = abs(ltp - vwap) / vwap if vwap > 0 else 999
         near_vwap  = vwap_diff <= cfg.get("vwap_entry_buffer", 0.0015)
-        at_vwap    = ltp <= vwap * 1.001
+        at_vwap    = ltp <= vwap * 1.001 if vwap > 0 else False
         rsi_ok     = rsi < cfg.get("rsi_overbought", 70)
         boll_lower = float(boll.get("lower", 0) or 0)
-        boll_ok    = ltp >= boll_lower
-
+        boll_ok    = ltp >= boll_lower if boll_lower > 0 else False
         ok, reason = paper.can_paper_trade(sym)
 
         symbol_checks.append({
@@ -606,27 +715,63 @@ def api_paper_debug():
             "boll_ok":       boll_ok,
             "all_entry_met": near_vwap and at_vwap and rsi_ok and boll_ok,
             "risk_ok":       ok,
-            "risk_reason":   reason,
+            "risk_reason":   reason if not ok else "✅ OK",
             "has_position":  sym in paper.paper_state["open_positions"],
         })
 
     return jsonify({
-        "status_checks":  checks,
-        "symbol_checks":  symbol_checks,
-        "current_time_ist": datetime.now().strftime("%H:%M:%S"),
-        "next_tick_info": "Paper tick runs every 60 seconds",
+        "ist_time":         ist_now().strftime("%H:%M:%S IST"),
+        "market_open":      is_market_hours(),
+        "paper_enabled":    paper.paper_state["enabled"],
+        "paper_halted":     paper.paper_state["halted"],
+        "market_bias":      engine.state["market_bias"],
+        "bias_ok":          engine.state["market_bias"] in (
+                                "BULL", "STRONG_BULL"),
+        "ltp_data_present": sum(
+            1 for v in ltp_cache.values() if float(v) > 0),
+        "paper_config":     cfg,
+        "symbol_checks":    symbol_checks,
     })
-    
-# ═══════════════════════════════════════════════════════════════════════════════
-#  SYMBOL SEARCH (useful for finding correct symbol names)
-# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.route("/api/test_fetch")
+def api_test_fetch():
+    """Force-fetch quotes regardless of market hours — for testing."""
+    if not engine.is_authenticated():
+        return jsonify({"error": "Not authenticated"})
+    try:
+        symbols = list({
+            i["symbol"] for i in engine.get_active_watchlist()
+        })
+        quotes = engine.fetch_quotes_bulk(symbols, "NSE")
+
+        # Also compute indicators
+        results = {}
+        for sym in symbols[:5]:
+            ind = engine.compute_indicators(sym, "NSE")
+            results[sym] = {
+                "ltp":  round(float(ind.get("ltp",  0)), 2),
+                "vwap": round(float(ind.get("vwap", 0)), 2),
+                "rsi":  round(float(ind.get("rsi",  50)), 2),
+                "bias": ind.get("bias", "NEUTRAL"),
+            }
+
+        return jsonify({
+            "quotes_fetched":   len(quotes),
+            "ltp_cache_count":  len(engine.state["ltp_cache"]),
+            "indicators_sample": results,
+            "ltp_values": {
+                k: round(float(v), 2)
+                for k, v in engine.state["ltp_cache"].items()
+            },
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
 
 @app.route("/api/search_symbol")
 def search_symbol():
-    """
-    Find exact NSE symbol names.
-    Usage: /api/search_symbol?q=HDFC&ex=NSE
-    """
+    """Search NSE symbols. Usage: /api/search_symbol?q=HDFC"""
     query    = request.args.get("q", "").upper().strip()
     exchange = request.args.get("ex", "NSE").upper()
     if not engine.is_authenticated():
@@ -641,7 +786,6 @@ def search_symbol():
                 "name":   i["name"],
                 "token":  i["instrument_token"],
                 "type":   i["instrument_type"],
-                "expiry": str(i.get("expiry", "")),
             }
             for i in instruments
             if query in i["tradingsymbol"].upper()
@@ -681,39 +825,32 @@ def api_logout():
 
 def _data_refresh_loop():
     """
-    Refresh LTP + indicators every 15 seconds.
-    Uses bulk quote API — one call for all symbols.
+    Refresh LTP + indicators every 15 seconds using bulk quote API.
+    Runs only during market hours (IST).
     """
     import time as _time
-    import pytz
-    IST = pytz.timezone("Asia/Kolkata")
 
     while True:
         try:
-            ist_now   = datetime.now(IST)
-            ist_time  = ist_now.time()
-            weekday   = ist_now.weekday()
-            mkt_open  = weekday < 5 and dtime(9, 15) <= ist_time <= dtime(15, 15)
-            is_auth   = engine.is_authenticated()
-
-            if is_auth and mkt_open:
-                # Get active watchlist
+            if engine.is_authenticated() and is_market_hours():
+                # Active watchlist symbols + index
                 watchlist = engine.get_active_watchlist()
-                symbols   = [i["symbol"] for i in watchlist]
+                symbols   = list({
+                    i["symbol"] for i in watchlist
+                })
                 symbols.append(engine.CONFIG["index"]["symbol"])
 
-                # Remove duplicates
-                symbols = list(set(symbols))
-
-                # ONE bulk API call
+                # Single bulk API call
                 try:
                     quotes = engine.fetch_quotes_bulk(symbols, "NSE")
-                    log.info(f"[REFRESH] Fetched {len(quotes)} quotes "
-                             f"at {ist_now.strftime('%H:%M:%S')} IST")
+                    log.info(
+                        f"[REFRESH] {len(quotes)} quotes @ "
+                        f"{ist_now().strftime('%H:%M:%S')} IST"
+                    )
                 except Exception as e:
                     log.error(f"[REFRESH QUOTE] {e}")
 
-                # Compute indicators
+                # Compute indicators per symbol
                 for item in watchlist:
                     try:
                         engine.compute_indicators(
@@ -723,89 +860,66 @@ def _data_refresh_loop():
                     except Exception as ex:
                         log.debug(f"[REFRESH IND] {item['symbol']}: {ex}")
 
-                # Market bias
+                # Update market bias
                 try:
                     engine.update_market_regime()
                 except Exception:
                     pass
 
-                # MTM
+                # Update MTM
                 try:
                     engine.risk_mgr.check_mtm(engine.state["ltp_cache"])
                 except Exception:
                     pass
 
-            elif is_auth and not mkt_open:
-                log.debug(f"[REFRESH] Market closed. "
-                          f"IST: {ist_now.strftime('%H:%M:%S')} "
-                          f"Weekday: {weekday}")
+            else:
+                # Log once per minute outside market hours
+                log.debug(
+                    f"[REFRESH] Market closed | "
+                    f"IST: {ist_now().strftime('%H:%M:%S')} | "
+                    f"Auth: {engine.is_authenticated()}"
+                )
 
         except Exception as e:
-            log.error(f"[DATA REFRESH] {e}")
+            log.error(f"[DATA REFRESH LOOP] {e}")
 
         _time.sleep(15)
 
 
-def _startup():
-    engine.try_load_token()
-
-    # Build initial dynamic watchlist if authenticated
-    if engine.is_authenticated():
-        try:
-            engine.build_dynamic_watchlist()
-        except Exception as e:
-            log.error(f"[STARTUP WL] {e}")
-
-    threading.Thread(
-        target=_data_refresh_loop,
-        daemon=True, name="DataRefresh"
-    ).start()
-    log.info("[STARTUP] Data refresh thread started.")
-
-    threading.Thread(
-        target=_paper_tick_loop,
-        daemon=True, name="PaperTick"
-    ).start()
-    log.info("[STARTUP] Paper tick thread started.")
-
-    # Also rebuild watchlist after login
-    threading.Thread(
-        target=_watchlist_rebuild_loop,
-        daemon=True, name="WLRebuild"
-    ).start()
-    log.info("[STARTUP] Watchlist rebuild thread started.")
-
-
-def _watchlist_rebuild_loop():
-    """Rebuild dynamic watchlist every 15 minutes."""
-    import time as _time
-    while True:
-        _time.sleep(900)  # 15 minutes
-        try:
-            if engine.is_authenticated() and engine.is_market_open():
-                engine.build_dynamic_watchlist()
-        except Exception as e:
-            log.error(f"[WL REBUILD] {e}")
-
-
 def _paper_tick_loop():
     """
-    Run paper strategy every 60 seconds.
-    Uses same cache as live engine — no extra API calls.
+    Run paper strategy tick every 60 seconds.
+    Uses same LTP/indicator cache as live engine.
     """
     import time as _time
+
     while True:
         try:
-            if paper.paper_state["enabled"]:
+            if paper.paper_state["enabled"] and is_market_hours():
                 paper.run_paper_tick(
-                    watchlist       = engine.CONFIG["watchlist"],
+                    watchlist       = engine.get_active_watchlist(),
                     indicator_cache = engine.state["indicator_cache"],
                     market_bias     = engine.state["market_bias"],
                     ltp_cache       = engine.state["ltp_cache"],
                 )
         except Exception as e:
             log.error(f"[PAPER TICK] {e}")
+
         _time.sleep(60)
+
+
+def _watchlist_rebuild_loop():
+    """Rebuild dynamic watchlist every 15 minutes during market hours."""
+    import time as _time
+
+    while True:
+        _time.sleep(900)   # 15 minutes
+        try:
+            if engine.is_authenticated() and is_market_hours():
+                engine.build_dynamic_watchlist()
+                log.info("[WL REBUILD] Dynamic watchlist refreshed.")
+        except Exception as e:
+            log.error(f"[WL REBUILD] {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -813,25 +927,51 @@ def _paper_tick_loop():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _startup():
-    """Load token and start background threads."""
+    """Load token and start all background threads."""
+    log.info("[STARTUP] ZeroBot Pro starting...")
+    log.info(f"[STARTUP] Server IST: {ist_now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log.info(f"[STARTUP] Market open: {is_market_hours()}")
+
+    # Restore session
     engine.try_load_token()
 
+    # If already authenticated, run post-login init
+    if engine.is_authenticated():
+        log.info("[STARTUP] Auth found — running post-login init...")
+        threading.Thread(
+            target=_post_login_init,
+            daemon=True, name="StartupInit"
+        ).start()
+
+    # Start background threads
     threading.Thread(
         target=_data_refresh_loop,
         daemon=True, name="DataRefresh"
     ).start()
-    log.info("[STARTUP] Data refresh thread started.")
+    log.info("[STARTUP] Data refresh thread → started (15s interval)")
 
     threading.Thread(
         target=_paper_tick_loop,
         daemon=True, name="PaperTick"
     ).start()
-    log.info("[STARTUP] Paper tick thread started.")
-    log.info("[STARTUP] ZeroBot Pro ready.")
+    log.info("[STARTUP] Paper tick thread → started (60s interval)")
+
+    threading.Thread(
+        target=_watchlist_rebuild_loop,
+        daemon=True, name="WLRebuild"
+    ).start()
+    log.info("[STARTUP] Watchlist rebuild thread → started (15m interval)")
+
+    log.info("[STARTUP] All systems ready.")
 
 
+# ─── Run startup ──────────────────────────────────────────────────────────────
 _startup()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)),
-            debug=False, threaded=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False,
+        threaded=True
+    )
