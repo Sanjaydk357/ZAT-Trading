@@ -1394,20 +1394,51 @@
       </div>
     </header>
 
+    
     <!-- ── Login Banner ── -->
     {% if login_needed %}
     <div class="login-banner">
       <h2>Zerodha Login Required</h2>
       <p>Authenticate to enable live trading and real-time data.</p>
-      <a href="{{ login_url }}" target="_blank" class="btn btn-b" style="text-decoration:none">
+
+      <!-- Show error if login failed -->
+      <div id="loginError" style="
+        display:none;
+        background:var(--red-dim);
+        border:1px solid var(--red);
+        border-radius:8px;
+        padding:10px 16px;
+        margin-bottom:14px;
+        font-size:.78rem;
+        color:var(--red)
+      "></div>
+
+      <a href="{{ login_url }}" class="btn btn-b" style="text-decoration:none">
         Open Kite Login →
       </a>
+
       <form class="token-form" method="POST" action="/auth">
-        <input class="token-input" name="request_token" placeholder="Paste request_token here..." required>
+        <input class="token-input" name="request_token"
+               placeholder="Or paste request_token manually..." required>
         <button type="submit" class="btn btn-g">Authenticate</button>
       </form>
     </div>
-    {% endif %}
+
+    <script>
+  // Show error message if redirected back with ?error=
+  const urlParams = new URLSearchParams(window.location.search);
+  const err = urlParams.get('error');
+  if (err) {
+    const el = document.getElementById('loginError');
+    const messages = {
+      'login_failed': '❌ Zerodha login was cancelled or failed. Please try again.',
+      'no_token':     '❌ No request token received. Please login again.',
+    };
+    el.textContent = messages[err] || `❌ Error: ${err}`;
+    el.style.display = 'block';
+  }
+</script>
+{% endif %}
 
     <!-- ── Profile Strip ── -->
     <div class="profile-strip" id="profileStrip" style="display:none">
