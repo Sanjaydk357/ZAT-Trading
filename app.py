@@ -666,34 +666,48 @@ def api_logout():
 
 def _data_refresh_loop():
     """
-    Refresh LTP + indicators every 15 seconds.
-    Keeps dashboard live between 60-second strategy ticks.
+    Refresh LTP + indicators every 15 seconds using BULK quote API.
+    One API call fetches ALL symbols at once.
     """
     import time as _time
     while True:
         try:
             if engine.is_authenticated() and engine.is_market_open():
-                # Refresh index
-                idx = engine.CONFIG["index"]
-                try:
-                    engine.get_ltp(idx["symbol"], idx["exchange"])
-                except Exception:
-                    pass
 
-                # Refresh each watchlist symbol
-                for item in engine.CONFIG["watchlist"]:
+                # Get active watchlist
+                watchlist = engine.get_active_watchlist()
+                symbols   = [i["symbol"] for i in watchlist]
+
+                # Add index
+                symbols.append(engine.CONFIG["index"]["symbol"])
+
+                # ONE bulk API call for all symbols
+                try:
+                    engine.fetch_quotes_bulk(symbols, "NSE")
+                    log.debug(f"[REFRESH] Fetched {len(symbols)} quotes")
+                except Exception as e:
+                    log.error(f"[REFRESH QUOTE] {e}")
+
+                # Compute indicators for each symbol
+                for item in watchlist:
                     try:
-                        engine.get_ltp(item["symbol"], item["exchange"])
                         engine.compute_indicators(
-                            item["symbol"], item["exchange"])
+                            item["symbol"],
+                            item.get("exchange", "NSE")
+                        )
                     except Exception as ex:
-                        log.debug(f"[REFRESH] {item['symbol']}: {ex}")
+                        log.debug(f"[REFRESH IND] {item['symbol']}: {ex}")
 
-                # Update market bias + MTM
+                # Update index indicators + market bias
                 try:
+                    idx = engine.CONFIG["index"]
+                    engine.compute_indicators(
+                        idx["symbol"], idx["exchange"])
                     engine.update_market_regime()
                 except Exception:
                     pass
+
+                # MTM update
                 try:
                     engine.risk_mgr.check_mtm(engine.state["ltp_cache"])
                 except Exception:
@@ -703,6 +717,48 @@ def _data_refresh_loop():
             log.error(f"[DATA REFRESH] {e}")
 
         _time.sleep(15)
+
+
+def _startup():
+    engine.try_load_token()
+
+    # Build initial dynamic watchlist if authenticated
+    if engine.is_authenticated():
+        try:
+            engine.build_dynamic_watchlist()
+        except Exception as e:
+            log.error(f"[STARTUP WL] {e}")
+
+    threading.Thread(
+        target=_data_refresh_loop,
+        daemon=True, name="DataRefresh"
+    ).start()
+    log.info("[STARTUP] Data refresh thread started.")
+
+    threading.Thread(
+        target=_paper_tick_loop,
+        daemon=True, name="PaperTick"
+    ).start()
+    log.info("[STARTUP] Paper tick thread started.")
+
+    # Also rebuild watchlist after login
+    threading.Thread(
+        target=_watchlist_rebuild_loop,
+        daemon=True, name="WLRebuild"
+    ).start()
+    log.info("[STARTUP] Watchlist rebuild thread started.")
+
+
+def _watchlist_rebuild_loop():
+    """Rebuild dynamic watchlist every 15 minutes."""
+    import time as _time
+    while True:
+        _time.sleep(900)  # 15 minutes
+        try:
+            if engine.is_authenticated() and engine.is_market_open():
+                engine.build_dynamic_watchlist()
+        except Exception as e:
+            log.error(f"[WL REBUILD] {e}")
 
 
 def _paper_tick_loop():
