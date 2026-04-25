@@ -1,6 +1,6 @@
 """
 app.py — Flask Backend + ZeroBot Pro Entry Point
-Connects trader_engine + paper_trader to the dashboard.
+Render-compatible version: no file system dependency
 """
 
 import os
@@ -17,8 +17,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("zerobot.log", encoding="utf-8"),
+        logging.StreamHandler(),  # Render shows stdout in logs
     ]
 )
 log = logging.getLogger(__name__)
@@ -26,8 +25,122 @@ log = logging.getLogger(__name__)
 # ─── Flask App ────────────────────────────────────────────────────────────────
 app = Flask(__name__, template_folder="templates")
 
-# ─── Import engine AFTER logging is set up ────────────────────────────────────
 import trader_engine as engine
+
+# ─── In-memory trade log (replaces trades.json on Render) ────────────────────
+_trade_log_memory = []
+_trade_log_lock   = threading.Lock()
+
+def save_trade_memory(trade: dict):
+    """Save trade to in-memory log (Render has no persistent disk)."""
+    with _trade_log_lock:
+        _trade_log_memory.append(trade)
+        # Keep last 500 trades in memory
+        if len(_trade_log_memory) > 500:
+            _trade_log_memory.pop(0)
+
+def get_trades_memory() -> list:
+    with _trade_log_lock:
+        return list(reversed(_trade_log_memory[-100:]))
+
+# Monkey-patch engine's _log_trade to use memory instead of file
+def _log_trade_memory(symbol, side, qty, price, order_id, sl=0, tp=0):
+    entry = {
+        "timestamp":   datetime.now().isoformat(),
+        "symbol":      symbol,
+        "side":        side,
+        "qty":         qty,
+        "price":       round(float(price), 2),
+        "order_id":    str(order_id),
+        "sl":          round(float(sl), 2),
+        "tp":          round(float(tp), 2),
+        "market_bias": engine.state.get("market_bias", ""),
+    }
+    save_trade_memory(entry)
+
+engine._log_trade = _log_trade_memory
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TOKEN STORAGE — uses env var on Render (no file system)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# In-memory token store (persists for the lifetime of the Render instance)
+_token_store = {
+    "token": None,
+    "date":  None,
+}
+
+def save_token(token: str):
+    """Save token in memory (Render) or file (local)."""
+    today = datetime.today().strftime("%Y-%m-%d")
+    _token_store["token"] = token
+    _token_store["date"]  = today
+    # Also try file (works locally, silently fails on Render)
+    try:
+        with open("access_token.json", "w") as f:
+            json.dump({"token": token, "date": today}, f)
+    except Exception:
+        pass
+    log.info("[TOKEN] Saved in memory.")
+
+def load_token() -> tuple[str | None, str | None]:
+    """Load token from memory first, then file."""
+    # Check memory
+    if _token_store["token"]:
+        return _token_store["token"], _token_store["date"]
+    # Try file (local dev)
+    try:
+        with open("access_token.json") as f:
+            data = json.load(f)
+        return data.get("token"), data.get("date")
+    except Exception:
+        return None, None
+
+def delete_token():
+    """Clear token from memory and file."""
+    _token_store["token"] = None
+    _token_store["date"]  = None
+    try:
+        os.remove("access_token.json")
+    except Exception:
+        pass
+
+# Override engine's token functions to use our memory store
+def _try_load_token_render():
+    """Render-compatible token loader."""
+    global_auth = engine._auth
+    token, date = load_token()
+    if not token:
+        log.info("[AUTH] No saved token.")
+        return
+    today = datetime.today().strftime("%Y-%m-%d")
+    if date == today:
+        try:
+            engine.kite.set_access_token(token)
+            engine._auth = True
+            engine._fetch_profile()
+            engine.add_log("Session restored from saved token", "info")
+            log.info("[AUTH] Token restored.")
+        except Exception as e:
+            log.error(f"[AUTH] Token restore failed: {e}")
+    else:
+        log.info("[AUTH] Stale token — login required.")
+
+def _authenticate_render(request_token: str):
+    """Render-compatible authentication."""
+    data  = engine.kite.generate_session(
+        request_token, api_secret=engine.CONFIG["api_secret"])
+    token = data["access_token"]
+    engine.kite.set_access_token(token)
+    engine._auth = True
+    save_token(token)
+    engine._fetch_profile()
+    engine.add_log("Login successful", "info")
+    log.info("[AUTH] Authenticated.")
+
+# Patch engine functions
+engine.try_load_token  = _try_load_token_render
+engine.authenticate    = _authenticate_render
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE ROUTES
@@ -61,7 +174,6 @@ def auth():
 
 @app.route("/api/state")
 def api_state():
-    """Main dashboard state — everything the live tab needs."""
     s    = engine.state
     cfg  = engine.CONFIG["strategy"]
     risk = engine.CONFIG["risk"]
@@ -69,10 +181,10 @@ def api_state():
     # ── Watchlist rows ────────────────────────────────────────────────────────
     watchlist_rows = []
     for item in engine.CONFIG["watchlist"]:
-        sym = item["symbol"]
-        ex  = item["exchange"]
-        ind = s["indicator_cache"].get(sym, {})
-        ltp = float(s["ltp_cache"].get(sym, 0.0))
+        sym  = item["symbol"]
+        ex   = item["exchange"]
+        ind  = s["indicator_cache"].get(sym, {})
+        ltp  = float(s["ltp_cache"].get(sym, 0.0))
         vwap = float(ind.get("vwap", 0) or 0)
         chg  = round(((ltp - vwap) / vwap * 100), 2) if vwap > 0 else 0.0
         watchlist_rows.append({
@@ -115,8 +227,8 @@ def api_state():
                 "ltp":   round(ltp, 2),
                 "pnl":   round((ltp - entry) * qty, 2),
                 "side":  str(pos.get("side", "BUY")),
-                "sl":    round(float(pos.get("trail_sl",
-                               pos.get("sl_price", 0)) or 0), 2),
+                "sl":    round(float(
+                    pos.get("trail_sl", pos.get("sl_price", 0)) or 0), 2),
                 "tp":    round(float(pos.get("tp_price", 0) or 0), 2),
             })
 
@@ -167,14 +279,13 @@ def api_state():
             "net_pnl":        round(gross - brok, 2),
             "best_trade":     round(float(perf.get("best_trade", 0)), 2),
             "worst_trade":    round(float(perf.get("worst_trade", 0)), 2),
-            "win_rate":       round(wins / total * 100, 1) if total > 0 else 0.0,
-            "avg_win":        round(gross / wins, 2) if wins > 0 else 0.0,
+            "win_rate":  round(wins / total * 100, 1) if total > 0 else 0.0,
+            "avg_win":   round(gross / wins, 2) if wins > 0 else 0.0,
         },
     })
 
 
 def _safe_indicators(cache: dict) -> dict:
-    """Convert indicator cache to JSON-safe dict."""
     result = {}
     for sym, ind in cache.items():
         if not isinstance(ind, dict):
@@ -218,15 +329,14 @@ def api_start():
         return jsonify({"ok": False, "msg": "Bot is already running."})
     if engine.state["halted"] or engine.state.get("market_stop"):
         return jsonify({"ok": False,
-                        "msg": "Bot is halted. Click Reset Halt first."})
+                        "msg": "Bot halted. Click Reset Halt first."})
     try:
         t = threading.Thread(target=engine.start_bot,
                              daemon=True, name="BotThread")
         t.start()
         engine.add_log("Bot started from dashboard", "info")
-        return jsonify({"ok": True, "msg": "Bot started successfully."})
+        return jsonify({"ok": True, "msg": "Bot started."})
     except Exception as e:
-        log.error(f"[START] {e}")
         return jsonify({"ok": False, "msg": str(e)})
 
 
@@ -245,7 +355,7 @@ def api_square_off():
         return jsonify({"ok": False, "msg": "Not authenticated."})
     try:
         engine.square_off_all("Manual — dashboard")
-        return jsonify({"ok": True, "msg": "All live positions squared off."})
+        return jsonify({"ok": True, "msg": "All positions squared off."})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)})
 
@@ -264,7 +374,7 @@ def api_config():
     try:
         cfg  = engine.CONFIG["strategy"]
         risk = engine.CONFIG["risk"]
-        _apply = {
+        _map = {
             "mode":               (str,   cfg,  "mode"),
             "take_profit_pct":    (float, cfg,  "take_profit_pct"),
             "stop_loss_pct":      (float, cfg,  "stop_loss_pct"),
@@ -275,39 +385,23 @@ def api_config():
             "max_daily_loss":     (float, risk, "max_daily_loss"),
             "max_open_positions": (int,   risk, "max_open_positions"),
         }
-        for key, (typ, target, field) in _apply.items():
+        for key, (typ, target, field) in _map.items():
             if key in data:
                 target[field] = typ(data[key])
-
-        engine.add_log("Live config updated from dashboard", "info")
+        engine.add_log("Live config updated", "info")
         return jsonify({"ok": True, "msg": "Config updated."})
     except Exception as e:
-        log.error(f"[CONFIG] {e}")
         return jsonify({"ok": False, "msg": str(e)})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  LIVE TRADE HISTORY + PERFORMANCE
+#  TRADE HISTORY + PERFORMANCE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/trades")
 def api_trades():
-    try:
-        trades = []
-        path   = engine.CONFIG.get("trade_log", "trades.json")
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            trades.append(json.loads(line))
-                        except Exception:
-                            pass
-        return jsonify({"trades": list(reversed(trades[-100:]))})
-    except Exception as e:
-        log.error(f"[TRADES] {e}")
-        return jsonify({"trades": []})
+    """Return trades from in-memory log."""
+    return jsonify({"trades": get_trades_memory()})
 
 
 @app.route("/api/performance")
@@ -326,8 +420,8 @@ def api_performance():
         "net_pnl":        round(gross - brok, 2),
         "best_trade":     round(float(perf.get("best_trade", 0)), 2),
         "worst_trade":    round(float(perf.get("worst_trade", 0)), 2),
-        "win_rate":       round(wins / total * 100, 1) if total > 0 else 0.0,
-        "avg_win":        round(gross / wins, 2) if wins > 0 else 0.0,
+        "win_rate":  round(wins / total * 100, 1) if total > 0 else 0.0,
+        "avg_win":   round(gross / wins, 2) if wins > 0 else 0.0,
     })
 
 
@@ -337,9 +431,10 @@ def api_performance():
 
 @app.route("/api/paper/state")
 def api_paper_state():
-    ltp_cache = engine.state["ltp_cache"]
-    ind_cache = engine.state["indicator_cache"]
-    return jsonify(paper.get_safe_state(ltp_cache, ind_cache))
+    return jsonify(paper.get_safe_state(
+        engine.state["ltp_cache"],
+        engine.state["indicator_cache"]
+    ))
 
 
 @app.route("/api/paper/enable", methods=["POST"])
@@ -371,39 +466,12 @@ def api_paper_reset():
     data = request.get_json(force=True) or {}
     try:
         if "starting_capital" in data:
-            cap = float(data["starting_capital"])
-            paper.paper_state["config"]["starting_capital"] = cap
+            paper.paper_state["config"]["starting_capital"] = \
+                float(data["starting_capital"])
         paper.reset_paper()
         return jsonify({"ok": True, "msg": "Paper state reset."})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)})
-
-@app.route("/api/search_symbol")
-def search_symbol():
-    """
-    Search for exact symbol name on NSE.
-    Usage: /api/search_symbol?q=HDFC
-    """
-    query    = request.args.get("q", "").upper()
-    exchange = request.args.get("ex", "NSE")
-    if not engine.is_authenticated():
-        return jsonify({"error": "Not authenticated"})
-    try:
-        instruments = engine.kite.instruments(exchange)
-        matches = [
-            {
-                "symbol":  i["tradingsymbol"],
-                "name":    i["name"],
-                "token":   i["instrument_token"],
-                "type":    i["instrument_type"],
-            }
-            for i in instruments
-            if query in i["tradingsymbol"] or query in i["name"].upper()
-        ][:20]  # limit to 20 results
-        return jsonify({"matches": matches, "total": len(matches)})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-        
 
 
 @app.route("/api/paper/config", methods=["POST"])
@@ -419,10 +487,9 @@ def api_paper_config():
 @app.route("/api/paper/square_off", methods=["POST"])
 def api_paper_square_off():
     try:
-        paper.paper_square_off_all(engine.state["ltp_cache"],
-                                   "Manual — dashboard")
-        return jsonify({"ok": True,
-                        "msg": "All paper positions squared off."})
+        paper.paper_square_off_all(
+            engine.state["ltp_cache"], "Manual — dashboard")
+        return jsonify({"ok": True, "msg": "Paper positions closed."})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)})
 
@@ -436,6 +503,41 @@ def api_paper_trades():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  SYMBOL SEARCH (useful for finding correct symbol names)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/search_symbol")
+def search_symbol():
+    """
+    Find exact NSE symbol names.
+    Usage: /api/search_symbol?q=HDFC&ex=NSE
+    """
+    query    = request.args.get("q", "").upper().strip()
+    exchange = request.args.get("ex", "NSE").upper()
+    if not engine.is_authenticated():
+        return jsonify({"error": "Not authenticated"})
+    if not query:
+        return jsonify({"error": "Provide ?q=SYMBOL"})
+    try:
+        instruments = engine.kite.instruments(exchange)
+        matches = [
+            {
+                "symbol": i["tradingsymbol"],
+                "name":   i["name"],
+                "token":  i["instrument_token"],
+                "type":   i["instrument_type"],
+                "expiry": str(i.get("expiry", "")),
+            }
+            for i in instruments
+            if query in i["tradingsymbol"].upper()
+            or query in i["name"].upper()
+        ][:20]
+        return jsonify({"matches": matches, "count": len(matches)})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  LOGOUT
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -444,23 +546,17 @@ def api_logout():
     try:
         if engine.bot_running:
             engine.stop_bot()
-
-        token_file = engine.CONFIG.get("token_file", "access_token.json")
-        if os.path.exists(token_file):
-            os.remove(token_file)
-
+        delete_token()
         engine._auth = False
         try:
             engine.kite.set_access_token(None)
         except Exception:
             pass
-
         engine.state["profile"] = {}
         engine.state["funds"]   = {}
         engine.add_log("User logged out", "alert")
         return jsonify({"ok": True, "msg": "Logged out."})
     except Exception as e:
-        log.error(f"[LOGOUT] {e}")
         return jsonify({"ok": False, "msg": str(e)})
 
 
@@ -470,8 +566,8 @@ def api_logout():
 
 def _data_refresh_loop():
     """
-    Refresh LTP + indicators for all watchlist symbols every 15 seconds.
-    Keeps dashboard live even between 60-second strategy ticks.
+    Refresh LTP + indicators every 15 seconds.
+    Keeps dashboard live between 60-second strategy ticks.
     """
     import time as _time
     while True:
@@ -511,9 +607,8 @@ def _data_refresh_loop():
 
 def _paper_tick_loop():
     """
-    Run paper strategy tick every 60 seconds.
-    Uses the same LTP + indicator cache as the live engine.
-    No extra Zerodha API calls — completely free.
+    Run paper strategy every 60 seconds.
+    Uses same cache as live engine — no extra API calls.
     """
     import time as _time
     while True:
@@ -531,32 +626,29 @@ def _paper_tick_loop():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  STARTUP + MAIN
+#  STARTUP
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _startup():
-    """Load saved token and launch background threads."""
-    # Try to restore previous session
+    """Load token and start background threads."""
     engine.try_load_token()
 
-    # Data refresh thread — keeps LTP/indicators fresh every 15s
     threading.Thread(
         target=_data_refresh_loop,
-        daemon=True,
-        name="DataRefresh"
+        daemon=True, name="DataRefresh"
     ).start()
     log.info("[STARTUP] Data refresh thread started.")
 
-    # Paper tick thread — runs paper strategy every 60s
     threading.Thread(
         target=_paper_tick_loop,
-        daemon=True,
-        name="PaperTick"
+        daemon=True, name="PaperTick"
     ).start()
     log.info("[STARTUP] Paper tick thread started.")
+    log.info("[STARTUP] ZeroBot Pro ready.")
 
+
+_startup()
 
 if __name__ == "__main__":
-    _startup()
-    log.info("[STARTUP] ZeroBot Pro → http://0.0.0.0:5000")
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)),
+            debug=False, threaded=True)
