@@ -1,15 +1,7 @@
 """
 Robust VWAP-EMA Hybrid Trading Engine
-Strategy: Trend-Confirmed Mean Reversion with Dynamic Position Sizing
-
-Layers:
-  1. Market Regime Filter (NIFTY VWAP + EMA)
-  2. VWAP Pullback Entry with RSI + Bollinger confirmation
-  3. ATR-based Trailing Stop Loss
-  4. Z-Score Arbitrage (only on extreme dislocations)
-  5. Risk Manager with Two-Strike Rule + Circuit Breaker
+Dynamic watchlist — auto-selects best stocks meeting conditions
 """
-
 
 import os
 import time
@@ -22,7 +14,6 @@ from datetime import datetime, time as dtime
 from kiteconnect import KiteConnect
 from dotenv import load_dotenv
 
-# ─── Load .env ────────────────────────────────────────────────────────────────
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 
 API_KEY    = os.getenv("API_KEY")
@@ -31,14 +22,12 @@ API_SECRET = os.getenv("API_SECRET")
 if not API_KEY or not API_SECRET:
     raise EnvironmentError(
         "\n[ERROR] API_KEY or API_SECRET not found in .env\n"
-        "Create a .env file with:\n"
-        "  API_KEY=your_api_key\n"
-        "  API_SECRET=your_api_secret\n"
+        "Create .env with:\n"
+        "  API_KEY=your_key\n"
+        "  API_SECRET=your_secret\n"
     )
 
-# ─── Logging ──────────────────────────────────────────────────────────────────
 log = logging.getLogger(__name__)
-log.info(f"[ENV] API Key: {API_KEY[:6]}{'*' * (len(API_KEY)-6)}")
 
 from indicators import (
     calculate_vwap, calculate_ema, calculate_ema_series,
@@ -55,7 +44,6 @@ CONFIG = {
 
     "strategy": {
         "mode":                "hybrid",
-        "margin_pct":          0.5,
         "take_profit_pct":     1.5,
         "stop_loss_pct":       0.35,
         "max_trades_per_day":  6,
@@ -73,35 +61,33 @@ CONFIG = {
         "use_dynamic_sizing":  True,
         "risk_per_trade_pct":  0.5,
         "trailing_sl":         True,
-        "no_fly_minutes":      15,
         "trade_cutoff_hour":   14,
         "trade_cutoff_minute": 0,
+        # Dynamic watchlist settings
+        "use_dynamic_watchlist": True,
+        "dynamic_wl_size":       20,   # monitor top 20 NIFTY 50 stocks
+        "min_price":             100,  # ignore penny stocks
+        "max_price":             100000,
     },
 
+    # ── Static fallback watchlist (used if dynamic fetch fails) ───────────────
     "watchlist": [
-        {"symbol": "RELIANCE",  "exchange": "NSE", "qty": 1, "priority": 1},
-        {"symbol": "HDFCBANK",  "exchange": "NSE", "qty": 1, "priority": 1},
-        {"symbol": "ICICIBANK", "exchange": "NSE", "qty": 1, "priority": 2},
-        {"symbol": "INFY",      "exchange": "NSE", "qty": 1, "priority": 2},
-        {"symbol": "TCS",       "exchange": "NSE", "qty": 1, "priority": 3},
+        {"symbol": "RELIANCE",   "exchange": "NSE", "qty": 1, "priority": 1},
+        {"symbol": "HDFCBANK",   "exchange": "NSE", "qty": 1, "priority": 1},
+        {"symbol": "ICICIBANK",  "exchange": "NSE", "qty": 1, "priority": 2},
+        {"symbol": "INFY",       "exchange": "NSE", "qty": 1, "priority": 2},
+        {"symbol": "TCS",        "exchange": "NSE", "qty": 1, "priority": 3},
+        {"symbol": "SBIN",       "exchange": "NSE", "qty": 1, "priority": 3},
+        {"symbol": "AXISBANK",   "exchange": "NSE", "qty": 1, "priority": 4},
+        {"symbol": "KOTAKBANK",  "exchange": "NSE", "qty": 1, "priority": 4},
+        {"symbol": "BAJFINANCE", "exchange": "NSE", "qty": 1, "priority": 5},
+        {"symbol": "WIPRO",      "exchange": "NSE", "qty": 1, "priority": 5},
     ],
 
     "index": {
         "symbol":   "NIFTY 50",
         "exchange": "NSE",
     },
-
-    "arb_pairs": [
-        {
-            "leg_a": {"symbol": "NIFTY25MAYFUT", "exchange": "NFO"},
-            "leg_b": {"symbol": "NIFTY 50",      "exchange": "NSE"},
-            "spread_threshold": 50,
-            "zscore_entry":     2.5,
-            "zscore_exit":      0.5,
-            "qty":              50,
-            "spread_history":   [],
-        }
-    ],
 
     "risk": {
         "max_daily_loss":     3000,
@@ -117,24 +103,41 @@ CONFIG = {
     "trade_log":    "trades.json",
 }
 
+# ─── NIFTY 50 UNIVERSE ────────────────────────────────────────────────────────
+# All NIFTY 50 stocks — bot will pick best ones dynamically
+NIFTY50_UNIVERSE = [
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
+    "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BPCL", "BHARTIARTL",
+    "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB", "DRREDDY",
+    "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE",
+    "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC",
+    "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK", "LT",
+    "LTIM", "MARUTI", "NESTLEIND", "NTPC", "ONGC",
+    "POWERGRID", "RELIANCE", "SBILIFE", "SHRIRAMFIN", "SBIN",
+    "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL",
+    "TECHM", "TITAN", "ULTRACEMCO", "WIPRO", "ZOMATO",
+]
+
 # ─── STATE ────────────────────────────────────────────────────────────────────
 state = {
-    "open_positions":   {},
-    "daily_pnl":        0.0,
-    "mtm_pnl":          0.0,
-    "trade_count":      0,
-    "halted":           False,
-    "market_stop":      False,
-    "ltp_cache":        {},
-    "ohlcv_cache":      {},
-    "indicator_cache":  {},
-    "reference_prices": {},
-    "activity_log":     [],
-    "profile":          {},
-    "funds":            {},
-    "strike_count":     {},
-    "market_bias":      "NEUTRAL",
-    "session_date":     "",
+    "open_positions":    {},
+    "daily_pnl":         0.0,
+    "mtm_pnl":           0.0,
+    "trade_count":       0,
+    "halted":            False,
+    "market_stop":       False,
+    "ltp_cache":         {},
+    "ohlcv_cache":       {},
+    "indicator_cache":   {},
+    "quote_cache":       {},   # raw Kite quote data
+    "reference_prices":  {},
+    "activity_log":      [],
+    "profile":           {},
+    "funds":             {},
+    "strike_count":      {},
+    "market_bias":       "NEUTRAL",
+    "session_date":      "",
+    "dynamic_watchlist": [],   # auto-updated watchlist
     "performance": {
         "total_trades":   0,
         "wins":           0,
@@ -153,6 +156,9 @@ bot_running = False
 _stop_event = threading.Event()
 _state_lock = threading.Lock()
 risk_mgr    = RiskManager(CONFIG, state)
+
+# Token cache — avoid repeated instrument list fetches
+_token_cache: dict = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -189,12 +195,19 @@ def fmt_price(p: float) -> str:
     return f"₹{float(p):,.2f}"
 
 
+def get_active_watchlist() -> list:
+    """
+    Return dynamic watchlist if available, else static fallback.
+    """
+    dyn = state.get("dynamic_watchlist", [])
+    return dyn if dyn else CONFIG["watchlist"]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  AUTH
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def try_load_token():
-    """Try to restore a saved access token on startup."""
     global _auth
     try:
         with open(CONFIG["token_file"]) as f:
@@ -205,17 +218,15 @@ def try_load_token():
             _auth = True
             _fetch_profile()
             add_log("Session restored from saved token", "info")
-            log.info("[AUTH] Token restored.")
         else:
-            log.info("[AUTH] Stale token — login required.")
+            log.info("[AUTH] Stale token.")
     except FileNotFoundError:
-        log.info("[AUTH] No token file — login required.")
+        log.info("[AUTH] No token file.")
     except Exception as e:
-        log.error(f"[AUTH] Token load error: {e}")
+        log.error(f"[AUTH] {e}")
 
 
 def authenticate(request_token: str):
-    """Exchange request_token for access_token and save it."""
     global _auth
     data  = kite.generate_session(request_token,
                                   api_secret=CONFIG["api_secret"])
@@ -226,12 +237,10 @@ def authenticate(request_token: str):
     with open(CONFIG["token_file"], "w") as f:
         json.dump({"token": token, "date": today}, f)
     _fetch_profile()
-    add_log("Login successful — token saved", "info")
-    log.info("[AUTH] Authenticated successfully.")
+    add_log("Login successful", "info")
 
 
 def _fetch_profile():
-    """Fetch user profile and margin data."""
     try:
         p = kite.profile()
         state["profile"] = {
@@ -243,7 +252,6 @@ def _fetch_profile():
             "exchanges": p.get("exchanges", []),
             "products":  p.get("products", []),
         }
-        log.info(f"[PROFILE] {state['profile']['name']}")
     except Exception as e:
         log.error(f"[PROFILE] {e}")
 
@@ -256,7 +264,8 @@ def _fetch_profile():
             "equity_available": round(float(avail.get("live_balance", 0)), 2),
             "equity_used":      round(float(used.get("debits", 0)), 2),
             "equity_total":     round(float(eq.get("net", 0)), 2),
-            "opening_balance":  round(float(avail.get("opening_balance", 0)), 2),
+            "opening_balance":  round(float(
+                avail.get("opening_balance", 0)), 2),
         }
         net = state["funds"]["equity_total"]
         if net > 0:
@@ -266,14 +275,54 @@ def _fetch_profile():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  MARKET DATA
+#  MARKET DATA — QUOTE API (faster + more reliable than historical)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Cache instrument tokens to avoid repeated lookups
-_token_cache: dict = {}
+def fetch_quotes_bulk(symbols: list, exchange: str = "NSE") -> dict:
+    """
+    Fetch live quotes for multiple symbols in ONE API call.
+    Returns dict: {symbol: quote_data}
+    Much faster than individual LTP calls.
+    """
+    if not _auth:
+        return {}
+    try:
+        keys  = [f"{exchange}:{sym}" for sym in symbols]
+        # Kite allows max 500 instruments per call
+        chunk_size = 200
+        result = {}
+        for i in range(0, len(keys), chunk_size):
+            chunk = keys[i:i + chunk_size]
+            data  = kite.quote(chunk)
+            for key, val in data.items():
+                sym = key.split(":", 1)[1]
+                result[sym] = val
+                # Update LTP cache
+                ltp = float(val.get("last_price", 0))
+                state["ltp_cache"][sym] = ltp
+        return result
+    except Exception as e:
+        log.error(f"[QUOTE BULK] {e}")
+        return {}
+
+
+def get_ltp(symbol: str, exchange: str = "NSE") -> float:
+    """Fetch single LTP."""
+    if not _auth:
+        return float(state["ltp_cache"].get(symbol, 0.0))
+    key = f"{exchange}:{symbol}"
+    try:
+        data  = kite.ltp([key])
+        price = float(data[key]["last_price"])
+        state["ltp_cache"][symbol] = price
+        return price
+    except Exception as e:
+        log.error(f"[LTP] {symbol}: {e}")
+        return float(state["ltp_cache"].get(symbol, 0.0))
+
 
 def _get_instrument_token(symbol: str, exchange: str) -> int | None:
-    """Get and cache instrument token for a symbol."""
+    """Get and cache instrument token."""
     key = f"{exchange}:{symbol}"
     if key in _token_cache:
         return _token_cache[key]
@@ -288,85 +337,220 @@ def _get_instrument_token(symbol: str, exchange: str) -> int | None:
     return None
 
 
-def get_ltp(symbol: str, exchange: str) -> float:
-    """Fetch live LTP from Kite and update cache."""
-    key = f"{exchange}:{symbol}"
-    try:
-        data  = kite.ltp([key])
-        price = float(data[key]["last_price"])
-        state["ltp_cache"][symbol] = price
-        return price
-    except Exception as e:
-        log.error(f"[LTP] {symbol}: {e}")
-        return float(state["ltp_cache"].get(symbol, 0.0))
-
-
 def get_ohlcv(symbol: str, exchange: str,
               interval: str = "5minute",
               lookback: int = 100) -> pd.DataFrame:
-    """Fetch OHLCV candles from Kite historical API."""
+    """Fetch OHLCV candles."""
+    # Return cached if recent (within 5 min)
+    cached = state["ohlcv_cache"].get(symbol)
+    if isinstance(cached, dict):
+        df   = cached.get("df", pd.DataFrame())
+        ts   = cached.get("ts", 0)
+        age  = time.time() - ts
+        if not df.empty and age < 300:  # 5 min cache
+            return df
+
     try:
         today = datetime.today().date()
         token = _get_instrument_token(symbol, exchange)
         if not token:
-            return state["ohlcv_cache"].get(symbol, pd.DataFrame())
+            return pd.DataFrame()
 
         candles = kite.historical_data(
-            instrument_token=token,
-            from_date=today,
-            to_date=today,
-            interval=interval,
+            instrument_token = token,
+            from_date        = today,
+            to_date          = today,
+            interval         = interval,
         )
         if not candles:
-            return state["ohlcv_cache"].get(symbol, pd.DataFrame())
+            return pd.DataFrame()
 
         df = pd.DataFrame(candles)
         df.columns = ["date", "open", "high", "low", "close", "volume"]
         df = df.tail(lookback).reset_index(drop=True)
-        state["ohlcv_cache"][symbol] = df
+
+        # Cache with timestamp
+        state["ohlcv_cache"][symbol] = {"df": df, "ts": time.time()}
         return df
 
     except Exception as e:
         log.error(f"[OHLCV] {symbol}: {e}")
-        return state["ohlcv_cache"].get(symbol, pd.DataFrame())
+        cached = state["ohlcv_cache"].get(symbol, {})
+        return cached.get("df", pd.DataFrame()) if isinstance(
+            cached, dict) else pd.DataFrame()
 
 
-def compute_indicators(symbol: str, exchange: str) -> dict:
+def compute_indicators(symbol: str, exchange: str = "NSE") -> dict:
     """Compute all technical indicators for a symbol."""
     cfg = CONFIG["strategy"]
     df  = get_ohlcv(symbol, exchange,
                     interval=cfg["candle_interval"],
                     lookback=cfg["candle_lookback"])
 
-    if df.empty or len(df) < 20:
-        log.warning(f"[IND] Insufficient data for {symbol} ({len(df)} rows)")
+    ltp = float(state["ltp_cache"].get(symbol, 0.0))
+
+    if df.empty or len(df) < 10:
+        log.warning(f"[IND] No OHLCV data for {symbol} — using quote only")
+        # Return minimal indicators from LTP cache
+        if ltp > 0:
+            minimal = {
+                "ltp":       ltp,
+                "vwap":      ltp,   # approximate
+                "ema9":      ltp,
+                "ema20":     ltp,
+                "ema200":    ltp,
+                "rsi":       50.0,
+                "atr":       ltp * 0.005,
+                "macd":      {"macd": 0, "signal": 0, "histogram": 0},
+                "bollinger": {
+                    "upper":  ltp * 1.02,
+                    "middle": ltp,
+                    "lower":  ltp * 0.98,
+                    "width":  4.0
+                },
+                "bias": "NEUTRAL",
+            }
+            state["indicator_cache"][symbol] = minimal
+            return minimal
         return {}
 
-    ltp    = get_ltp(symbol, exchange)
-    vwap   = calculate_vwap(df)
-    ema9   = calculate_ema(df, cfg["ema_fast"])
-    ema20  = calculate_ema(df, cfg["ema_slow"])
-    ema200 = calculate_ema(df, cfg["ema_trend"]) if len(df) >= 50 else ema20
-    rsi    = calculate_rsi(df, cfg["rsi_period"])
-    atr    = calculate_atr(df, cfg["atr_period"])
-    macd   = calculate_macd(df)
-    boll   = calculate_bollinger(df)
-    bias   = get_market_bias(ltp, vwap, ema20, ema200)
+    try:
+        vwap   = calculate_vwap(df)
+        ema9   = calculate_ema(df, cfg["ema_fast"])
+        ema20  = calculate_ema(df, cfg["ema_slow"])
+        ema200 = calculate_ema(df, cfg["ema_trend"]) \
+                 if len(df) >= 50 else ema20
+        rsi    = calculate_rsi(df, cfg["rsi_period"])
+        atr    = calculate_atr(df, cfg["atr_period"])
+        macd   = calculate_macd(df)
+        boll   = calculate_bollinger(df)
 
-    indicators = {
-        "ltp":       ltp,
-        "vwap":      vwap,
-        "ema9":      ema9,
-        "ema20":     ema20,
-        "ema200":    ema200,
-        "rsi":       rsi,
-        "atr":       atr,
-        "macd":      macd,
-        "bollinger": boll,
-        "bias":      bias,
-    }
-    state["indicator_cache"][symbol] = indicators
-    return indicators
+        # Use actual LTP from cache (more real-time than last candle close)
+        if ltp <= 0:
+            ltp = float(df["close"].iloc[-1])
+
+        bias = get_market_bias(ltp, vwap, ema20, ema200)
+
+        indicators = {
+            "ltp":       ltp,
+            "vwap":      vwap,
+            "ema9":      ema9,
+            "ema20":     ema20,
+            "ema200":    ema200,
+            "rsi":       rsi,
+            "atr":       atr,
+            "macd":      macd,
+            "bollinger": boll,
+            "bias":      bias,
+        }
+        state["indicator_cache"][symbol] = indicators
+        return indicators
+
+    except Exception as e:
+        log.error(f"[IND COMPUTE] {symbol}: {e}")
+        return {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  DYNAMIC WATCHLIST
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def build_dynamic_watchlist():
+    """
+    Fetch quotes for ALL NIFTY 50 stocks in one API call.
+    Score each stock and return the best candidates.
+    No hardcoded watchlist — bot picks dynamically.
+    """
+    if not _auth:
+        return
+
+    cfg      = CONFIG["strategy"]
+    universe = NIFTY50_UNIVERSE
+    size     = cfg.get("dynamic_wl_size", 20)
+
+    add_log(f"Building dynamic watchlist from {len(universe)} stocks...",
+            "info")
+
+    try:
+        # Fetch all quotes in one call
+        quotes = fetch_quotes_bulk(universe, "NSE")
+        if not quotes:
+            add_log("Dynamic watchlist: no quote data", "alert")
+            return
+
+        scored = []
+        for sym, q in quotes.items():
+            try:
+                ltp    = float(q.get("last_price", 0))
+                volume = float(q.get("volume", 0))
+                ohlc   = q.get("ohlc", {})
+                open_p = float(ohlc.get("open", ltp))
+                high   = float(ohlc.get("high", ltp))
+                low    = float(ohlc.get("low",  ltp))
+                close  = float(ohlc.get("close", ltp))
+
+                if ltp <= 0:
+                    continue
+                if ltp < cfg.get("min_price", 100):
+                    continue
+                if volume < 100000:   # minimum liquidity
+                    continue
+
+                # Day change %
+                day_chg = ((ltp - close) / close * 100) if close > 0 else 0
+                # Intraday range %
+                rng     = ((high - low) / low * 100) if low > 0 else 0
+                # Volume score (higher = better)
+                vol_score = min(volume / 1_000_000, 10)
+
+                # Score = volatility + momentum + volume
+                score = rng + abs(day_chg) + vol_score
+
+                scored.append({
+                    "symbol":   sym,
+                    "exchange": "NSE",
+                    "qty":      1,
+                    "ltp":      ltp,
+                    "volume":   volume,
+                    "day_chg":  round(day_chg, 2),
+                    "range":    round(rng, 2),
+                    "score":    round(score, 4),
+                    "priority": 1,
+                })
+            except Exception as ex:
+                log.debug(f"[DYN WL] {sym}: {ex}")
+
+        # Sort by score — best candidates first
+        scored.sort(key=lambda x: x["score"], reverse=True)
+
+        # Take top N
+        top = scored[:size]
+        for i, item in enumerate(top):
+            item["priority"] = i + 1
+
+        # Update state
+        state["dynamic_watchlist"] = top
+
+        # Also update CONFIG watchlist so paper trader uses it
+        CONFIG["watchlist"] = [
+            {
+                "symbol":   x["symbol"],
+                "exchange": x["exchange"],
+                "qty":      x["qty"],
+                "priority": x["priority"],
+            }
+            for x in top
+        ]
+
+        symbols = [x["symbol"] for x in top[:5]]
+        add_log(
+            f"Dynamic watchlist updated: {len(top)} stocks | "
+            f"Top 5: {', '.join(symbols)}", "info"
+        )
+
+    except Exception as e:
+        log.error(f"[DYN WATCHLIST] {e}")
+        add_log(f"Dynamic watchlist failed: {e}", "alert")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -374,7 +558,7 @@ def compute_indicators(symbol: str, exchange: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def update_market_regime():
-    """Compute NIFTY 50 bias and store in state."""
+    """Compute NIFTY 50 bias."""
     idx = CONFIG["index"]
     ind = compute_indicators(idx["symbol"], idx["exchange"])
     if not ind:
@@ -397,7 +581,6 @@ def update_market_regime():
 def place_order(symbol: str, exchange: str, side: str, qty: int,
                 order_type: str = "MARKET", price: float = 0,
                 sl_price: float = 0, tp_price: float = 0) -> str | None:
-    """Place a live order via Kite API."""
     try:
         transaction = (kite.TRANSACTION_TYPE_BUY
                        if side == "BUY"
@@ -421,10 +604,12 @@ def place_order(symbol: str, exchange: str, side: str, qty: int,
 
         order_id = kite.place_order(**params)
         ltp = get_ltp_cached(symbol)
-        msg  = (f"{side} {qty}×{symbol} @ {fmt_price(price or ltp)} "
-                f"SL:{fmt_price(sl_price)} TP:{fmt_price(tp_price)} "
-                f"[{order_id}]")
-        add_log(msg, "buy" if side == "BUY" else "sell")
+        add_log(
+            f"{side} {qty}×{symbol} @ {fmt_price(price or ltp)} "
+            f"SL:{fmt_price(sl_price)} TP:{fmt_price(tp_price)} "
+            f"[{order_id}]",
+            "buy" if side == "BUY" else "sell"
+        )
         _log_trade(symbol, side, qty, price or ltp,
                    order_id, sl_price, tp_price)
         state["performance"]["brokerage_paid"] += 20
@@ -437,7 +622,6 @@ def place_order(symbol: str, exchange: str, side: str, qty: int,
 
 
 def _log_trade(symbol, side, qty, price, order_id, sl=0, tp=0):
-    """Append trade record to trades.json."""
     entry = {
         "timestamp":   datetime.now().isoformat(),
         "symbol":      symbol,
@@ -452,8 +636,8 @@ def _log_trade(symbol, side, qty, price, order_id, sl=0, tp=0):
     try:
         with open(CONFIG["trade_log"], "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
-    except Exception as e:
-        log.error(f"[TRADE LOG] {e}")
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -461,21 +645,22 @@ def _log_trade(symbol, side, qty, price, order_id, sl=0, tp=0):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def run_hybrid_strategy():
-    """VWAP + EMA Hybrid — Entry and Exit Logic."""
     bias = state["market_bias"]
     cfg  = CONFIG["strategy"]
 
     if bias not in ("BULL", "STRONG_BULL"):
-        add_log(f"Regime filter: {bias} — no long trades", "info")
+        add_log(f"Regime filter: {bias} — skipping entries", "info")
         return
 
-    for item in sorted(CONFIG["watchlist"],
-                        key=lambda x: x.get("priority", 9)):
+    watchlist = get_active_watchlist()
+    add_log(f"Scanning {len(watchlist)} stocks...", "info")
+
+    for item in sorted(watchlist, key=lambda x: x.get("priority", 9)):
         symbol   = item["symbol"]
-        exchange = item["exchange"]
+        exchange = item.get("exchange", "NSE")
 
         ind = compute_indicators(symbol, exchange)
-        if not ind or ind.get("ltp", 0) == 0:
+        if not ind or ind.get("ltp", 0) <= 0:
             continue
 
         ltp  = float(ind["ltp"])
@@ -490,7 +675,6 @@ def run_hybrid_strategy():
         if symbol not in state["open_positions"]:
             ok, reason = risk_mgr.can_trade(symbol)
             if not ok:
-                add_log(f"SKIP {symbol}: {reason}", "info")
                 continue
 
             if vwap <= 0:
@@ -512,20 +696,20 @@ def run_hybrid_strategy():
                         min_qty     = item.get("qty", 1),
                     )
                 else:
-                    qty = item.get("qty", cfg["order_quantity"])
+                    qty = item.get("qty", 1)
 
                 sl_price = round(ltp * (1 - cfg["stop_loss_pct"] / 100), 2)
                 tp_price = round(ltp * (1 + cfg["take_profit_pct"] / 100), 2)
 
                 add_log(
-                    f"SIGNAL BUY {symbol} | LTP:{fmt_price(ltp)} "
-                    f"VWAP:{fmt_price(vwap)} RSI:{rsi:.1f} "
-                    f"MACD:{macd.get('histogram', 0):.4f} Qty:{qty}",
+                    f"ENTRY {symbol} | LTP:{fmt_price(ltp)} "
+                    f"VWAP:{fmt_price(vwap)} RSI:{rsi:.1f} Qty:{qty}",
                     "buy"
                 )
+                order_id = place_order(
+                    symbol, exchange, "BUY", qty,
+                    sl_price=sl_price, tp_price=tp_price)
 
-                order_id = place_order(symbol, exchange, "BUY", qty,
-                                       sl_price=sl_price, tp_price=tp_price)
                 if order_id:
                     with _state_lock:
                         state["open_positions"][symbol] = {
@@ -542,7 +726,7 @@ def run_hybrid_strategy():
                             "entry_rsi":   rsi,
                             "atr":         atr,
                         }
-                        state["trade_count"]              += 1
+                        state["trade_count"] += 1
                         state["performance"]["total_trades"] += 1
 
         # ── EXIT ──────────────────────────────────────────────────────────────
@@ -553,12 +737,10 @@ def run_hybrid_strategy():
             atr_val = float(pos.get("atr", 0))
             pnl_pct = (ltp - entry) / entry * 100
 
-            # Update trailing SL
             new_trail = calculate_trailing_sl(entry, ltp, atr_val, "BUY")
             if new_trail > pos["trail_sl"]:
                 pos["trail_sl"] = new_trail
-                add_log(
-                    f"TRAIL SL → {symbol} {fmt_price(new_trail)}", "info")
+                add_log(f"TRAIL SL → {symbol} {fmt_price(new_trail)}", "info")
 
             should_exit = False
             exit_reason = ""
@@ -581,7 +763,7 @@ def run_hybrid_strategy():
 
             if should_exit:
                 add_log(
-                    f"EXIT SIGNAL {symbol} | {exit_reason} | "
+                    f"EXIT {symbol} | {exit_reason} | "
                     f"Entry:{fmt_price(entry)} LTP:{fmt_price(ltp)} "
                     f"PnL:{pnl_pct:+.2f}%",
                     "sell"
@@ -589,9 +771,7 @@ def run_hybrid_strategy():
                 _exit_position(symbol, exchange, qty, ltp, entry, exit_reason)
 
 
-def _exit_position(symbol: str, exchange: str, qty: int,
-                   ltp: float, entry: float, reason: str = ""):
-    """Place sell order and update P&L state."""
+def _exit_position(symbol, exchange, qty, ltp, entry, reason=""):
     order_id = place_order(symbol, exchange, "SELL", qty)
     if order_id:
         pnl    = round((ltp - entry) * qty, 2)
@@ -620,95 +800,21 @@ def _exit_position(symbol: str, exchange: str, qty: int,
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  ARBITRAGE STRATEGY
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def run_arbitrage_strategy():
-    """Z-Score Cash-Futures Arbitrage."""
-    for pair in CONFIG["arb_pairs"]:
-        leg_a    = pair["leg_a"]
-        leg_b    = pair["leg_b"]
-        qty      = pair["qty"]
-        pair_key = f"ARB_{leg_a['symbol']}_{leg_b['symbol']}"
-
-        price_a = get_ltp(leg_a["symbol"], leg_a["exchange"])
-        price_b = get_ltp(leg_b["symbol"], leg_b["exchange"])
-
-        if price_a == 0 or price_b == 0:
-            continue
-
-        spread  = price_a - price_b
-        history = pair["spread_history"]
-        history.append(spread)
-        if len(history) > 100:
-            history.pop(0)
-
-        if len(history) < 20:
-            add_log(f"ARB: Building spread history ({len(history)}/20)", "info")
-            continue
-
-        zscore = calculate_zscore(pd.Series(history))
-        add_log(f"ARB | Spread:{fmt_price(spread)} Z:{zscore:.2f}", "info")
-
-        if (zscore >= pair["zscore_entry"]
-                and pair_key not in state["open_positions"]):
-            ok, reason = risk_mgr.can_trade()
-            if ok:
-                add_log(f"ARB ENTRY: Z={zscore:.2f}", "buy")
-                oid_a = place_order(leg_a["symbol"], leg_a["exchange"],
-                                    "SELL", qty)
-                oid_b = place_order(leg_b["symbol"], leg_b["exchange"],
-                                    "BUY", qty)
-                if oid_a and oid_b:
-                    state["open_positions"][pair_key] = {
-                        "entry_spread":  spread,
-                        "entry_zscore":  zscore,
-                        "qty":           qty,
-                        "leg_a":         leg_a,
-                        "leg_b":         leg_b,
-                        "entry_price_a": price_a,
-                        "entry_price_b": price_b,
-                    }
-                    state["trade_count"] += 2
-
-        elif pair_key in state["open_positions"]:
-            pos = state["open_positions"][pair_key]
-            if zscore <= pair["zscore_exit"]:
-                add_log(f"ARB EXIT: Z={zscore:.2f}", "sell")
-                place_order(leg_a["symbol"], leg_a["exchange"], "BUY",  qty)
-                place_order(leg_b["symbol"], leg_b["exchange"], "SELL", qty)
-                pnl = round((pos["entry_spread"] - spread) * qty, 2)
-                state["daily_pnl"]   += pnl
-                state["trade_count"] += 2
-                del state["open_positions"][pair_key]
-                add_log(f"ARB CLOSED PnL:{fmt_price(pnl)}",
-                        "buy" if pnl > 0 else "alert")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 #  EOD SQUARE OFF
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def square_off_all(reason: str = "EOD"):
-    """Force close all open positions."""
     add_log(f"SQUARE OFF ALL — {reason}", "alert")
     for symbol, pos in list(state["open_positions"].items()):
         try:
-            if symbol.startswith("ARB_"):
-                la = pos["leg_a"]
-                lb = pos["leg_b"]
-                place_order(la["symbol"], la["exchange"], "BUY",  pos["qty"])
-                place_order(lb["symbol"], lb["exchange"], "SELL", pos["qty"])
-                del state["open_positions"][symbol]
-            else:
-                ltp   = get_ltp(symbol, pos.get("exchange", "NSE"))
-                entry = float(pos["entry_price"])
-                pnl   = round((ltp - entry) * int(pos["qty"]), 2)
-                place_order(symbol, pos.get("exchange", "NSE"),
-                            "SELL", pos["qty"])
-                state["daily_pnl"] += pnl
-                del state["open_positions"][symbol]
-                add_log(f"SQ OFF {symbol} PnL:{fmt_price(pnl)}", "alert")
+            ltp   = float(state["ltp_cache"].get(symbol, pos["entry_price"]))
+            entry = float(pos["entry_price"])
+            pnl   = round((ltp - entry) * int(pos["qty"]), 2)
+            place_order(symbol, pos.get("exchange", "NSE"),
+                        "SELL", pos["qty"])
+            state["daily_pnl"] += pnl
+            del state["open_positions"][symbol]
+            add_log(f"SQ OFF {symbol} PnL:{fmt_price(pnl)}", "alert")
         except Exception as e:
             log.error(f"[SQ OFF] {symbol}: {e}")
     add_log("All positions squared off.", "alert")
@@ -719,49 +825,40 @@ def square_off_all(reason: str = "EOD"):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _strategy_tick():
-    """Main strategy tick — called every 60 seconds by scheduler."""
     if not is_market_open() or not _auth:
         return
 
     now   = datetime.now().time()
     today = datetime.today().strftime("%Y-%m-%d")
 
-    # Daily reset
     if state["session_date"] != today:
         risk_mgr.daily_reset()
         state["session_date"] = today
         add_log("New session — daily counters reset", "info")
 
-    # No-fly zone
     if now < dtime(9, 30):
-        add_log("No-fly zone (9:15–9:30) — observing market", "info")
+        add_log("No-fly zone (9:15–9:30) — observing", "info")
         return
 
-    # Refresh funds
     try:
         _fetch_profile()
     except Exception:
         pass
 
-    # MTM check
     risk_mgr.check_mtm(state["ltp_cache"])
+    update_market_regime()
 
     mode = CONFIG["strategy"]["mode"]
     add_log(
         f"TICK | Mode:{mode} | Bias:{state['market_bias']} | "
         f"PnL:{fmt_price(state['daily_pnl'])} | "
-        f"MTM:{fmt_price(state.get('mtm_pnl', 0))} | "
-        f"Trades:{state['trade_count']}",
+        f"Trades:{state['trade_count']} | "
+        f"WL:{len(get_active_watchlist())} stocks",
         "info"
     )
 
-    update_market_regime()
-
     if mode in ("hybrid", "margin"):
         run_hybrid_strategy()
-
-    if mode in ("hybrid", "arbitrage"):
-        run_arbitrage_strategy()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -769,7 +866,6 @@ def _strategy_tick():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def start_bot():
-    """Start the strategy scheduler in a loop."""
     global bot_running
     bot_running = True
     _stop_event.clear()
@@ -777,27 +873,25 @@ def start_bot():
     import schedule
     schedule.clear()
     schedule.every(60).seconds.do(_strategy_tick)
+    schedule.every(15).minutes.do(build_dynamic_watchlist)
     schedule.every().day.at("15:15").do(
         lambda: square_off_all("EOD 3:15 PM"))
+    schedule.every().day.at("09:16").do(build_dynamic_watchlist)
     schedule.every().day.at("09:30").do(update_market_regime)
 
-    add_log("Bot STARTED — VWAP-EMA Hybrid active", "info")
-    log.info("[BOT] Started.")
+    add_log("Bot STARTED — Dynamic VWAP-EMA Hybrid", "info")
 
     while not _stop_event.is_set():
         schedule.run_pending()
         time.sleep(1)
 
     bot_running = False
-    log.info("[BOT] Stopped.")
 
 
 def stop_bot():
-    """Stop the strategy scheduler."""
     global bot_running
     _stop_event.set()
     bot_running = False
     import schedule
     schedule.clear()
-    add_log("Bot STOPPED by user", "alert")
-    log.info("[BOT] Stop requested.")
+    add_log("Bot STOPPED", "alert")
