@@ -533,6 +533,75 @@ def api_paper_trades():
     return jsonify({"trades": trades})
 
 
+@app.route("/api/paper/debug")
+def api_paper_debug():
+    """Check paper trading engine status."""
+    ltp_cache = engine.state["ltp_cache"]
+    ind_cache = engine.state["indicator_cache"]
+
+    # Check each condition
+    checks = {
+        "paper_enabled":      paper.paper_state["enabled"],
+        "paper_halted":       paper.paper_state["halted"],
+        "market_open":        engine.is_market_open(),
+        "authenticated":      engine.is_authenticated(),
+        "market_bias":        engine.state["market_bias"],
+        "bias_allows_entry":  engine.state["market_bias"] in (
+                                  "BULL", "STRONG_BULL"),
+        "ltp_cache_count":    len(ltp_cache),
+        "indicator_cache_count": len(ind_cache),
+        "open_positions":     len(paper.paper_state["open_positions"]),
+        "trade_count_today":  paper.paper_state["trade_count"],
+        "daily_pnl":          paper.paper_state["daily_pnl"],
+        "trade_history_count": len(
+                                  paper.paper_state["trade_history"]),
+        "paper_config":       paper.paper_state["config"],
+    }
+
+    # Per-symbol entry check
+    symbol_checks = []
+    for item in engine.CONFIG["watchlist"]:
+        sym = item["symbol"]
+        ind = ind_cache.get(sym, {})
+        ltp  = float(ltp_cache.get(sym, 0))
+        vwap = float(ind.get("vwap", 0) or 0)
+        rsi  = float(ind.get("rsi", 50) or 50)
+        boll = ind.get("bollinger", {}) or {}
+        cfg  = paper.paper_state["config"]
+
+        vwap_diff  = abs(ltp - vwap) / vwap if vwap > 0 else 999
+        near_vwap  = vwap_diff <= cfg.get("vwap_entry_buffer", 0.0015)
+        at_vwap    = ltp <= vwap * 1.001
+        rsi_ok     = rsi < cfg.get("rsi_overbought", 70)
+        boll_lower = float(boll.get("lower", 0) or 0)
+        boll_ok    = ltp >= boll_lower
+
+        ok, reason = paper.can_paper_trade(sym)
+
+        symbol_checks.append({
+            "symbol":        sym,
+            "ltp":           round(ltp, 2),
+            "vwap":          round(vwap, 2),
+            "rsi":           round(rsi, 2),
+            "boll_lower":    round(boll_lower, 2),
+            "vwap_diff_pct": round(vwap_diff * 100, 4),
+            "near_vwap":     near_vwap,
+            "at_vwap":       at_vwap,
+            "rsi_ok":        rsi_ok,
+            "boll_ok":       boll_ok,
+            "all_entry_met": near_vwap and at_vwap and rsi_ok and boll_ok,
+            "risk_ok":       ok,
+            "risk_reason":   reason,
+            "has_position":  sym in paper.paper_state["open_positions"],
+        })
+
+    return jsonify({
+        "status_checks":  checks,
+        "symbol_checks":  symbol_checks,
+        "current_time_ist": datetime.now().strftime("%H:%M:%S"),
+        "next_tick_info": "Paper tick runs every 60 seconds",
+    })
+    
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SYMBOL SEARCH (useful for finding correct symbol names)
 # ═══════════════════════════════════════════════════════════════════════════════
