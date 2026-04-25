@@ -2,11 +2,12 @@
 Advanced Risk Management Module.
 Handles all risk checks, position sizing, and kill switches.
 """
-
+import pytz
 import logging
 from datetime import datetime, time as dtime
 
 log = logging.getLogger(__name__)
+IST = pytz.timezone("Asia/Kolkata")
 
 
 class RiskManager:
@@ -30,68 +31,56 @@ class RiskManager:
 
     # ── Main Check ────────────────────────────────────────────────────────────
     def can_trade(self, symbol: str = None) -> tuple[bool, str]:
-        """
-        Returns (True, "") if trading is allowed.
-        Returns (False, reason) if blocked.
-        """
-        # 1. Hard halt check
+        cfg = self.config
         if self.state["halted"]:
             return False, "Bot halted"
-
-        # 2. Market stop (circuit breaker)
         if self.state.get("market_stop"):
             return False, "Market circuit breaker triggered"
-
-        # 3. Time checks
-        now = datetime.now().time()
-
-        # No-fly zone: 9:15 – 9:30
+    
+        # Use IST time
+        now = datetime.now(IST).time()
+    
         no_fly_end = dtime(9, 30)
-        mkt_open   = self.config["market_open"]
+        mkt_open   = cfg["market_open"]
         if mkt_open <= now < no_fly_end:
             return False, "No-fly zone (9:15-9:30 AM)"
-
-        # No new trades after 2:00 PM
-        cutoff_h = self.config["strategy"].get("trade_cutoff_hour", 14)
-        cutoff_m = self.config["strategy"].get("trade_cutoff_minute", 0)
+    
+        cutoff_h = cfg["strategy"].get("trade_cutoff_hour", 14)
+        cutoff_m = cfg["strategy"].get("trade_cutoff_minute", 0)
         if now >= dtime(cutoff_h, cutoff_m):
             return False, f"No new trades after {cutoff_h:02d}:{cutoff_m:02d}"
-
-
-        # 4. Daily loss limit
-        risk     = self.config["risk"]
+    
+        risk     = cfg["risk"]
         daily_pnl = self.state["daily_pnl"]
         if daily_pnl <= -risk["max_daily_loss"]:
             self.state["halted"] = True
             self.state["market_stop"] = True
             return False, f"Daily loss limit ₹{risk['max_daily_loss']} hit"
-
-        # 5. Max trades
-        if self.state["trade_count"] >= self.config["strategy"]["max_trades_per_day"]:
+    
+        if self.state["trade_count"] >= cfg["strategy"]["max_trades_per_day"]:
             return False, "Max trades per day reached"
-
-        # 6. Max open positions
+    
         if len(self.state["open_positions"]) >= risk["max_open_positions"]:
             return False, "Max open positions reached"
-
-        # 7. Two-strike rule
+    
         if symbol:
             strikes = self.state.get("strike_count", {})
             if strikes.get(symbol, 0) >= 2:
                 return False, f"Two-strike rule: {symbol} banned today"
-
+    
         return True, ""
-
-    # ── Record Strike ─────────────────────────────────────────────────────────
-    def add_strike(self, symbol: str):
-        """Add a loss strike for a symbol (Two-Strike Rule)."""
-        if "strike_count" not in self.state:
-            self.state["strike_count"] = {}
-        self.state["strike_count"][symbol] = \
-            self.state["strike_count"].get(symbol, 0) + 1
-        strikes = self.state["strike_count"][symbol]
-        self.log.info(f"[STRIKE] {symbol}: {strikes}/2")
-        return strikes
+    
+    
+        # ── Record Strike ─────────────────────────────────────────────────────────
+        def add_strike(self, symbol: str):
+            """Add a loss strike for a symbol (Two-Strike Rule)."""
+            if "strike_count" not in self.state:
+                self.state["strike_count"] = {}
+            self.state["strike_count"][symbol] = \
+                self.state["strike_count"].get(symbol, 0) + 1
+            strikes = self.state["strike_count"][symbol]
+            self.log.info(f"[STRIKE] {symbol}: {strikes}/2")
+            return strikes
 
     # ── Daily Reset ───────────────────────────────────────────────────────────
     def daily_reset(self):
