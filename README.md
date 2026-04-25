@@ -4,7 +4,7 @@ Automated buy/sell bot using the official `pykiteconnect` library with:
 - **Margin strategy** — buys on dips, exits on profit/stop-loss
 - **Arbitrage strategy** — cash-futures spread trading
 - **Risk management** — daily loss limit, position caps, trade count limits
-- **Live dashboard** — `dashboard.html` for monitoring
+- **Live dashboard** — `index.html` for monitoring
 
 ---
 
