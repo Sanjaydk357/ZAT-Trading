@@ -922,6 +922,13 @@ def _watchlist_rebuild_loop():
             log.error(f"[WL REBUILD] {e}")
 
 
+@app.route("/api/raw_quote_test")
+def raw_quote_test():
+    try:
+        result = engine.kite.quote(["NSE:RELIANCE"])
+        return jsonify({"ok": True, "data": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "type": type(e).__name__})
 # ═══════════════════════════════════════════════════════════════════════════════
 #  STARTUP
 # ═══════════════════════════════════════════════════════════════════════════════
